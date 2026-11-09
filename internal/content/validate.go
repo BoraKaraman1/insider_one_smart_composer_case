@@ -39,9 +39,18 @@ var (
 	// Unicode-aware, so a Cyrillic lookalike such as "іnsider.com" is caught.
 	domainRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+` +
 		`(?:com|net|org|info|biz|io|co|ai|app|dev|me|ly|gl|to|cc|tv|xyz|link|shop|store|site|online|tr|eu|uk|de|us))(?:$|[^\p{L}\p{N}_-])`)
-	ipRe    = regexp.MustCompile(`(?:^|[^\p{N}.])(\d{1,3}(?:\.\d{1,3}){3})(?:$|[^\p{N}.])`)
-	emailRe = regexp.MustCompile(`[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+`)
-	htmlRe  = regexp.MustCompile(`<\s*/?\s*[A-Za-z][^>]*>`)
+	// A domain with any TLD, given away by the path that follows it, such as
+	// "evil.top/login". The TLD starts with a letter, so "10.30/11" passes.
+	domainPathRe = regexp.MustCompile(`(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}[\p{L}\p{N}-]+/)`)
+	// What may touch {{campaign_url}}. Anything else could extend the link
+	// into another one: "{{campaign_url}}@evil.top", "{{campaign_url}}.evil.com".
+	// Before it: the start or white space, then opening punctuation.
+	// After it: closing punctuation, then white space or the end.
+	urlBeforeRe = regexp.MustCompile(`(?:^|[\s\p{Z}])[(\["'“‘«:]*$`)
+	urlAfterRe  = regexp.MustCompile(`^[.,!?;:)\]"'”’»]*(?:[\s\p{Z}]|$)`)
+	ipRe        = regexp.MustCompile(`(?:^|[^\p{N}.])(\d{1,3}(?:\.\d{1,3}){3})(?:$|[^\p{N}.])`)
+	emailRe     = regexp.MustCompile(`[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+`)
+	htmlRe      = regexp.MustCompile(`<\s*/?\s*[A-Za-z][^>]*>`)
 )
 
 // ValidateJSON parses and validates content given as raw JSON.
@@ -132,22 +141,15 @@ func Validate(set *schema.Set, doc any) (Content, validation.Result) {
 
 // checkBans reports links, email addresses and HTML in the literal text.
 func checkBans(res *validation.Result, path string, parts []Part) {
-	var b strings.Builder
-	for _, p := range parts {
-		switch {
-		case p.Var == "":
-			b.WriteString(p.Text)
-		case p.Var == "campaign_url":
-			b.WriteString(" ")
-		default:
-			b.WriteString("x")
-		}
-	}
-	text := b.String()
-	if m := schemeRe.FindString(text); m != "" {
+	text := fill(parts)
+	if urlTouched(parts) {
+		res.Error(path, validation.URLNotAllowed, "text directly next to {{campaign_url}} is not allowed; put a space around it")
+	} else if m := schemeRe.FindString(text); m != "" {
 		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("link %q is not allowed; use {{campaign_url}}", m))
 	} else if m := domainRe.FindStringSubmatch(text); m != nil {
 		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("domain %q is not allowed; use {{campaign_url}}", m[1]))
+	} else if m := domainPathRe.FindStringSubmatch(text); m != nil {
+		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("link %q is not allowed; use {{campaign_url}}", m[1]))
 	} else if m := ipRe.FindStringSubmatch(text); m != nil {
 		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("address %q is not allowed; use {{campaign_url}}", m[1]))
 	}
@@ -157,6 +159,34 @@ func checkBans(res *validation.Result, path string, parts []Part) {
 	if m := htmlRe.FindString(text); m != "" {
 		res.Error(path, validation.HTMLNotAllowed, fmt.Sprintf("HTML %q is not allowed; copy is plain text", m))
 	}
+}
+
+// fill joins the parts with a placeholder for each variable: a space for
+// {{campaign_url}}, an "x" for the others.
+func fill(parts []Part) string {
+	var b strings.Builder
+	for _, p := range parts {
+		switch p.Var {
+		case "":
+			b.WriteString(p.Text)
+		case "campaign_url":
+			b.WriteString(" ")
+		default:
+			b.WriteString("x")
+		}
+	}
+	return b.String()
+}
+
+// urlTouched reports whether any {{campaign_url}} has text attached to it.
+func urlTouched(parts []Part) bool {
+	for i, p := range parts {
+		if p.Var == "campaign_url" &&
+			(!urlBeforeRe.MatchString(fill(parts[:i])) || !urlAfterRe.MatchString(fill(parts[i+1:]))) {
+			return true
+		}
+	}
+	return false
 }
 
 func lookup(doc any, a, b string) (string, bool) {
