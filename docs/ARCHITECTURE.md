@@ -280,22 +280,27 @@ Each row shows message id, channel, attempts, last error, next attempt time and 
 ## 13. Repo layout
 
 ```
-cmd/            api, worker, mockprovider, seed (one module, subcommands)
+cmd/app/        one binary, subcommands: api, worker, mockprovider, migrate, seed
 internal/
   llm/          Client interface, anthropic + fixture-replay impls, prompts, partial-JSON extractor
   schema/       embedded JSON Schemas, full and API-derived, validator
-  segment/      DSL types, catalog, compiler, description generator
+  validation/   shared Issue{path, code, message} result type
+  segment/      DSL types, catalog, validator, compiler, consent filter, description generator
   content/      template parser, renderer, SMS encoding and length
   campaign/     state machine, revisions, service
   delivery/     fan-out and send workers, Classify, backoff, rate limiter, provider client
-  httpapi/      handlers, SSE
-  store/        pgx queries, migrations
+  httpapi/      handlers, auth middleware, SSE
+  store/        pgx queries, migrations runner
+  seed/         deterministic seed generator and loader
+  testdb/       per-package test database cloned from a template
   mockprovider/ provider server, fault injection, idempotency store
 schemas/        *.schema.json
+migrations/     SQL migrations (embedded)
 web/            Vue 3 + Vite + TypeScript, Vitest
-docs/           ARCHITECTURE.md
+docs/           ARCHITECTURE.md, segment-rules.md, seed-data.md
 .claude/        settings.json, hooks/
-docker-compose.yml, Makefile, README.md, DECISIONS.md, ai-sessions/
+.githooks/      pre-commit
+docker-compose.yml, Makefile, CLAUDE.md, AGENTS.md, README.md, DECISIONS.md, ai-sessions/
 ```
 
 **Candidate dependencies** (each one checked on pkg.go.dev for maintenance and license before it is added):

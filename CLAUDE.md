@@ -6,7 +6,7 @@ Stack: Go backend, Postgres for data and queue, Vue 3 frontend, Claude API.
 
 Read before changing anything in an area:
 - `docs/ARCHITECTURE.md`: the design, and section 2 maps every rule below to its enforcement and its test.
-- `DECISIONS.md`: why things are the way they are, plus the agent log.
+- `DECISIONS.md`: why things are the way they are, plus the agent log. The user writes this file; agents read it and never edit it.
 - `docs/segment-rules.md`: the segment rule language (the spec the compiler and validator implement).
 - `docs/seed-data.md`: seed data shape and time anchoring.
 
@@ -79,13 +79,13 @@ schemas/  migrations/  web/  docs/
 - Errors returned to clients carry stable codes: `{path, code, message}`.
 - Logging is `slog` JSON. Never log phone numbers, email addresses, message bodies or secrets.
 - Code that depends on "now" takes it as a parameter (`asOf`). Tests use fixed times.
-- Before adding a dependency, check it on pkg.go.dev (maintenance, license, exact version) and record it in `DECISIONS.md`.
+- Before adding a dependency, check it on pkg.go.dev (maintenance, license, exact version) and report what you found to the user in chat.
 - Every change comes with tests. `make test` must pass with no API key.
 - Prose in docs, comments and commit messages uses short sentences and no em dashes.
 
 ## Working with agents
 
-- Agent output, including your own, is untrusted until a test or a check confirms it. When an agent gets something wrong, add a row to the agent log in `DECISIONS.md`: what was delegated, what was kept, what was wrong, and how it was caught.
+- Agent output, including your own, is untrusted until a test or a check confirms it. When an agent gets something wrong, or a new decision comes up, report it to the user in chat: what was delegated, what was kept, what was wrong, and how it was caught. Do not edit `DECISIONS.md`; the user writes it.
 - **The user commits.** Never run `git commit`, amend or push. Leave changes in the working tree and suggest a commit message.
 - If a hook or permission rule blocks you, do not look for a way around it. Ask.
 

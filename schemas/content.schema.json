@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.composer.local/content.schema.json",
+  "title": "Campaign content v1",
+  "description": "SMS and email copy as plain-text templates. Only {{first_name}}, {{last_name}}, {{city}} and {{campaign_url}} may appear. No URLs, email addresses or HTML. Length limits here apply to the raw template; the rendered worst-case length is checked separately and is authoritative.",
+  "type": "object",
+  "properties": {
+    "sms": {
+      "type": "object",
+      "properties": {
+        "body": { "type": "string", "minLength": 1, "maxLength": 160 }
+      },
+      "required": ["body"],
+      "additionalProperties": false
+    },
+    "email": {
+      "type": "object",
+      "properties": {
+        "subject": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 3000 }
+      },
+      "required": ["subject", "body"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["sms", "email"],
+  "additionalProperties": false
+}

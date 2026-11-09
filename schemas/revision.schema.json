@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.composer.local/revision.schema.json",
+  "title": "Campaign revision v1",
+  "description": "A full campaign proposal: segment plus content. Human edits are submitted in this shape and go through the same validation as LLM output (rule 7). Used locally only, never sent to the API.",
+  "type": "object",
+  "properties": {
+    "segment": { "$ref": "segment_rule.schema.json" },
+    "content": { "$ref": "content.schema.json" }
+  },
+  "required": ["segment", "content"],
+  "additionalProperties": false
+}

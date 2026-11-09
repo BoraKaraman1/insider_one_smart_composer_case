@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "match": "all",
+  "conditions": [
+    { "kind": "enum_attribute", "field": "city", "op": "eq", "value": "istanbul" },
+    { "kind": "event", "event": "cart_add", "within_days": 30, "negate": false },
+    { "kind": "event", "event": "purchase", "within_days": 30, "negate": true }
+  ]
+}

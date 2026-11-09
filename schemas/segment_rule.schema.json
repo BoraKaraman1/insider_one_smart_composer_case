@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.composer.local/segment_rule.schema.json",
+  "title": "Segment rule v1",
+  "description": "Who receives a campaign. Spec: docs/segment-rules.md. Consent is not part of the rule; the compiler always adds it.",
+  "type": "object",
+  "properties": {
+    "version": { "const": 1 },
+    "match": {
+      "description": "all: every condition must hold. any: at least one must hold.",
+      "enum": ["all", "any"]
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/condition" }
+    }
+  },
+  "required": ["version", "match", "conditions"],
+  "additionalProperties": false,
+  "$defs": {
+    "condition": {
+      "anyOf": [
+        { "$ref": "#/$defs/city_single" },
+        { "$ref": "#/$defs/city_list" },
+        { "$ref": "#/$defs/language_single" },
+        { "$ref": "#/$defs/language_list" },
+        { "$ref": "#/$defs/loyalty_tier_single" },
+        { "$ref": "#/$defs/loyalty_tier_list" },
+        { "$ref": "#/$defs/days_since_signup" },
+        { "$ref": "#/$defs/event" }
+      ]
+    },
+    "city": {
+      "enum": ["istanbul", "ankara", "izmir", "bursa", "antalya", "adana", "konya", "gaziantep", "kocaeli", "eskisehir"]
+    },
+    "language": { "enum": ["tr", "en"] },
+    "loyalty_tier": { "enum": ["bronze", "silver", "gold"] },
+    "single_op": { "enum": ["eq", "neq"] },
+    "list_op": { "enum": ["in", "not_in"] },
+    "city_single": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "city" },
+        "op": { "$ref": "#/$defs/single_op" },
+        "value": { "$ref": "#/$defs/city" }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "city_list": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "city" },
+        "op": { "$ref": "#/$defs/list_op" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/city" }
+        }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "language_single": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "language" },
+        "op": { "$ref": "#/$defs/single_op" },
+        "value": { "$ref": "#/$defs/language" }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "language_list": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "language" },
+        "op": { "$ref": "#/$defs/list_op" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/language" }
+        }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "loyalty_tier_single": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "loyalty_tier" },
+        "op": { "$ref": "#/$defs/single_op" },
+        "value": { "$ref": "#/$defs/loyalty_tier" }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "loyalty_tier_list": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "enum_attribute" },
+        "field": { "const": "loyalty_tier" },
+        "op": { "$ref": "#/$defs/list_op" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/loyalty_tier" }
+        }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "days_since_signup": {
+      "type": "object",
+      "description": "Whole UTC days since signup: floor((asOf - signup_at) / 24h).",
+      "properties": {
+        "kind": { "const": "number_attribute" },
+        "field": { "const": "days_since_signup" },
+        "op": { "enum": ["eq", "neq", "gt", "gte", "lt", "lte"] },
+        "value": { "type": "integer", "minimum": 0, "maximum": 3650 }
+      },
+      "required": ["kind", "field", "op", "value"],
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "description": "Matches when the user has (negate false) or has not (negate true) at least one event of this type with asOf - within_days*24h <= occurred_at <= asOf.",
+      "properties": {
+        "kind": { "const": "event" },
+        "event": { "enum": ["cart_add", "purchase", "page_view"] },
+        "within_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+        "negate": { "type": "boolean" }
+      },
+      "required": ["kind", "event", "within_days", "negate"],
+      "additionalProperties": false
+    }
+  }
+}
