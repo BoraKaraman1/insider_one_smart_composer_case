@@ -111,19 +111,19 @@ Brief from the case spec: send a 30% discount reminder to Istanbul users who add
 }
 ```
 
-The compiled SQL looks like this for the SMS channel. It is illustrative; the compiler's golden tests are authoritative.
+`segment.AudienceQuery` turns it into this for the SMS channel. Line breaks are added here; `TestCompileExample` pins the exact text.
 
 ```sql
-FROM users u
-WHERE u.city = $1
-  AND EXISTS (SELECT 1 FROM user_events e
-              WHERE e.user_id = u.id AND e.type = $2
-                AND e.occurred_at >= $3 AND e.occurred_at <= $4)
-  AND NOT EXISTS (SELECT 1 FROM user_events e
-              WHERE e.user_id = u.id AND e.type = $5
-                AND e.occurred_at >= $6 AND e.occurred_at <= $7)
-  AND u.consent_sms              -- added by the compiler, not by the rule
+SELECT u.id FROM users u WHERE (u.city = $1
+  AND EXISTS (SELECT 1 FROM user_events e WHERE e.user_id = u.id AND e.type = $2
+              AND e.occurred_at >= $3 AND e.occurred_at <= $4)
+  AND NOT EXISTS (SELECT 1 FROM user_events e WHERE e.user_id = u.id AND e.type = $5
+              AND e.occurred_at >= $6 AND e.occurred_at <= $7))
+  AND u.consent_sms
 -- args: istanbul, cart_add, asOf-30d, asOf, purchase, asOf-30d, asOf
 ```
 
-Every value, event type and time cutoff is a bound parameter. Column names and operators come from Go maps. The SQL text depends only on the rule's shape, never on its values.
+- Every value, event type and time cutoff is a bound parameter, and column names and operators come from Go maps. The SQL text depends only on the rule's shape, never on its values. `TestShapeProperty` and `FuzzCompileShape` check that.
+- The rule is always wrapped in parentheses, and the consent column is ANDed outside them. So an `any` rule (OR) cannot leak past the consent filter.
+- Only `AudienceQuery`, which always adds consent, and `CountAudience` are exported. Nothing returns recipients without the filter.
+- On the seed data, `TestOracle` checks 500 random rules against a Go implementation of these semantics. `TestBoundaries` pins the exact window and day edges.

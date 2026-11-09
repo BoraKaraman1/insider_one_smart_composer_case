@@ -1,0 +1,72 @@
+name: smart-campaign-composer
+
+# docker compose up: Postgres, then migrate, then seed (anchored at now, a
+# no-op if data exists), then the api on http://127.0.0.1:8080.
+# The api needs ADMIN_TOKEN; the default below is a dev token, shown in the
+# README. Compose never starts the api unauthenticated.
+
+x-app: &app
+  build: .
+  environment:
+    DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app # local dev database only
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    <<: *app
+    command: ["seed"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *app
+    command: ["api"]
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      LISTEN_ADDR: ":8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  # Throwaway server for make test: in memory, removed after the run.
+  postgres-test:
+    image: postgres:18-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_PASSWORD: test # throwaway test server only
+    tmpfs:
+      - /var/lib/postgresql
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

@@ -1,0 +1,15 @@
+# Never send secrets to the build context (rule 1): COPY . . would bake a
+# local .env into an image layer.
+.env
+.env.*
+
+# Not needed to build the binary.
+.git
+.claude
+.githooks
+ai-sessions
+web/node_modules
+web/dist
+bin
+*.test
+coverage.out

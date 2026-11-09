@@ -47,9 +47,17 @@ func TestMigrateUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	db := freshDB(t)
 
+	pending := func(want bool) {
+		t.Helper()
+		if got, err := Pending(ctx, db); err != nil || got != want {
+			t.Fatalf("Pending = %v, %v; want %v", got, err, want)
+		}
+	}
+	pending(true)
 	if err := Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
+	pending(false)
 	if got := tablesPresent(t, db); !slices.Equal(got, appTables) {
 		t.Fatalf("after up: tables %v, want %v", got, appTables)
 	}
@@ -70,6 +78,7 @@ func TestMigrateUpDownUp(t *testing.T) {
 	if got := tablesPresent(t, db); len(got) != 0 {
 		t.Fatalf("after down: tables left %v", got)
 	}
+	pending(true)
 	var domains int
 	if err := db.QueryRow("SELECT count(*) FROM pg_type WHERE typtype = 'd' AND typnamespace = 'public'::regnamespace").Scan(&domains); err != nil || domains != 0 {
 		t.Fatalf("after down: %d domains left (%v)", domains, err)

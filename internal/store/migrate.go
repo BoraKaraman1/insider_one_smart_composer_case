@@ -35,3 +35,13 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
+// Pending reports whether db lacks any embedded migration (for /readyz). It
+// only reads, so it takes no lock.
+func Pending(ctx context.Context, db *sql.DB) (bool, error) {
+	p, err := goose.NewProvider(goose.DialectPostgres, db, migrations.FS)
+	if err != nil {
+		return false, err
+	}
+	return p.HasPending(ctx)
+}

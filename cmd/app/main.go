@@ -1,12 +1,13 @@
 // Command app is the single binary for every service. The first argument
 // picks the subcommand.
 //
+//	app api                        serve the HTTP API (ADMIN_TOKEN, LISTEN_ADDR)
 //	app migrate                    apply database migrations
 //	app seed [-users N] [-seed S] [-as-of now|RFC3339] [-reset]
 //	                               load synthetic users and events
 //
-// Both need DATABASE_URL. More subcommands (api, worker, mockprovider) are
-// added as they are built.
+// All need DATABASE_URL. More subcommands (worker, mockprovider) are added as
+// they are built.
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/httpapi"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/seed"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
@@ -34,11 +38,13 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <migrate|seed> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: app <api|migrate|seed> [flags]")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
+	case "api":
+		err = apiCmd(ctx, log)
 	case "migrate":
 		err = migrate(ctx)
 	case "seed":
@@ -58,6 +64,53 @@ func databaseURL() (string, error) {
 		return "", errors.New("DATABASE_URL is not set")
 	}
 	return url, nil
+}
+
+func apiCmd(ctx context.Context, log *slog.Logger) error {
+	cfg, err := httpapi.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		return err // fail closed: no token, no explicit opt-out, no API
+	}
+	if cfg.AdminToken == "" {
+		log.Warn("ALLOW_UNAUTHENTICATED=true: the API accepts requests without a token; local development only")
+	}
+	url, err := databaseURL()
+	if err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	schemas, err := schema.Load()
+	if err != nil {
+		return err
+	}
+	srv := &httpapi.Server{Config: cfg, Pool: pool, Schemas: schemas, Log: log}
+	h, err := srv.Handler()
+	if err != nil {
+		return err
+	}
+	hs := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(shutdown)
+	}()
+	log.Info("api listening", "addr", cfg.ListenAddr, "auth_required", cfg.AdminToken != "")
+	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func migrate(ctx context.Context) error {

@@ -62,5 +62,11 @@ func Load(ctx context.Context, pool *pgxpool.Pool, ds Dataset, reset bool) (bool
 		ds.AsOf, ds.Seed, len(ds.Users)); err != nil {
 		return false, err
 	}
+	// Collect planner statistics now. Without them, queries right after a
+	// bulk load (before autovacuum gets to it) pick seq-scan plans that are
+	// about 10x slower.
+	if _, err := tx.Exec(ctx, "ANALYZE users, user_events"); err != nil {
+		return false, err
+	}
 	return true, tx.Commit(ctx)
 }
