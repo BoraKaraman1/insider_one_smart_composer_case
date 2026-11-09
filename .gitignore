@@ -1,0 +1,21 @@
+# Secrets: the API key lives only in .env, which is never committed.
+.env
+.env.*
+!.env.example
+
+# Personal Claude Code settings (shared settings in .claude/settings.json are committed)
+.claude/settings.local.json
+
+# Go
+/bin/
+coverage.out
+*.test
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
