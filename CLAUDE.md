@@ -75,7 +75,7 @@ schemas/  migrations/  web/  docs/
 
 ## Conventions
 
-- Go 1.25+, stdlib `net/http`, pgx v5, no ORM. SQL lives only in `internal/store` and the segment compiler.
+- Go 1.26+, stdlib `net/http`, pgx v5, no ORM. SQL lives only in `internal/store` and the segment compiler.
 - Errors returned to clients carry stable codes: `{path, code, message}`.
 - Logging is `slog` JSON. Never log phone numbers, email addresses, message bodies or secrets.
 - Code that depends on "now" takes it as a parameter (`asOf`). Tests use fixed times.

@@ -33,10 +33,13 @@ const (
 	Revision    Name = "revision.schema.json"
 )
 
-// Set holds the embedded schemas, raw and compiled.
+// Set holds the embedded schemas, raw and compiled. Every entry under $defs
+// is compiled too, so a validator can check one part of a document against
+// the exact branch it belongs to and report precise errors.
 type Set struct {
 	raw      map[Name]any
 	compiled map[Name]*jsonschema.Schema
+	defs     map[string]*jsonschema.Schema // key: name + "#/$defs/" + def
 }
 
 // Load reads and compiles every embedded schema. A file whose $id does not
@@ -47,7 +50,7 @@ func Load() (*Set, error) {
 		return nil, err
 	}
 	c := jsonschema.NewCompiler()
-	set := &Set{raw: map[Name]any{}, compiled: map[Name]*jsonschema.Schema{}}
+	set := &Set{raw: map[Name]any{}, compiled: map[Name]*jsonschema.Schema{}, defs: map[string]*jsonschema.Schema{}}
 	for _, f := range files {
 		b, err := schemas.FS.ReadFile(f)
 		if err != nil {
@@ -75,6 +78,16 @@ func Load() (*Set, error) {
 			return nil, fmt.Errorf("schema %s: %w", name, err)
 		}
 		set.compiled[name] = s
+
+		defs, _ := set.raw[name].(map[string]any)["$defs"].(map[string]any)
+		for def := range defs {
+			key := string(name) + "#/$defs/" + def
+			ds, err := c.Compile(BaseURL + key)
+			if err != nil {
+				return nil, fmt.Errorf("schema %s: %w", key, err)
+			}
+			set.defs[key] = ds
+		}
 	}
 	return set, nil
 }
@@ -91,6 +104,16 @@ func (s *Set) Validate(name Name, instance any) error {
 	sch, ok := s.compiled[name]
 	if !ok {
 		return fmt.Errorf("schema: unknown schema %q", name)
+	}
+	return sch.Validate(instance)
+}
+
+// ValidateDef checks a decoded instance against one entry of a schema's
+// $defs, for example (SegmentRule, "city_list").
+func (s *Set) ValidateDef(name Name, def string, instance any) error {
+	sch, ok := s.defs[string(name)+"#/$defs/"+def]
+	if !ok {
+		return fmt.Errorf("schema: unknown definition %s#/$defs/%s", name, def)
 	}
 	return sch.Validate(instance)
 }

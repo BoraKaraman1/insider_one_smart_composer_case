@@ -239,7 +239,7 @@ Each row shows message id, channel, attempts, last error, next attempt time and 
 | `user_events` | id, user_id, type (`cart_add`, `purchase`, `page_view`), occurred_at; all NOT NULL |
 | `seed_meta` | as_of (the seed's time anchor), seed, user_count, loaded_at |
 | `campaigns` | id, brief, state, version, current_revision_id, approved_revision_id, approved_by, approved_at, campaign_url |
-| `campaign_revisions` | id, campaign_id, n, source, segment (jsonb), sms_body, email_subject, email_body, valid, validation (jsonb), audience_count |
+| `campaign_revisions` | id, campaign_id, n, source, segment (jsonb), sms_body, email_subject, email_body, warnings (jsonb), audience_total, sms_eligible, email_eligible. Only valid revisions are stored: failed LLM attempts stay in `llm_calls`, and rejected edits get a 422 |
 | `campaign_events` | campaign_id, from_state, to_state, actor, reason, at |
 | `llm_calls` | campaign_id, stage, attempt, outcome, stop_reason, tokens in/out, latency_ms, validation_errors |
 | `messages` | id (= idempotency key), campaign_id, user_id, channel, state (`queued`, `sending`, `sent`, `failed`, `dead`, `skipped`), attempts, last_error_class (reason label), last_error, next_attempt_at, provider_message_id; `UNIQUE(campaign_id, user_id, channel)` |
