@@ -7,12 +7,17 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 func TestLimiterSettings(t *testing.T) {
 	l := NewLimiter()
-	if l.Limit() != RatePerSecond || l.Burst() != Burst {
-		t.Errorf("limiter %v/s burst %d; want %d/s burst %d", l.Limit(), l.Burst(), RatePerSecond, Burst)
+	if l.Limit() != rate.Every(Interval) || l.Burst() != Burst {
+		t.Errorf("limiter %v/s burst %d; want one token every %v, burst %d", l.Limit(), l.Burst(), Interval, Burst)
+	}
+	if Interval != 10500*time.Microsecond {
+		t.Errorf("interval %v; want 10.5ms, 100 tokens per 1.05 s", Interval)
 	}
 	if RatePerSecond != 100 || Burst != 1 {
 		t.Errorf("rule 8 is 100 per second with burst 1, got %d and %d", RatePerSecond, Burst)
@@ -30,8 +35,8 @@ func TestLimiterRunsOnTheFakeClock(t *testing.T) {
 		if err := l.Wait(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if got := time.Since(start); got != 10*time.Millisecond {
-			t.Fatalf("second token after %v of fake time, want exactly 10ms", got)
+		if got := time.Since(start); got != Interval {
+			t.Fatalf("second token after %v of fake time, want exactly %v", got, Interval)
 		}
 	})
 }
@@ -66,11 +71,13 @@ func TestLimiterNeverExceeds100PerSecond(t *testing.T) {
 		}
 		wg.Wait()
 
-		if n := len(calls); n < 990 || n > 1001 {
-			t.Errorf("%d calls in 10 s, want 990 to 1,001", n)
+		// On saniyede 10.5 ms arayla 953 jeton çıkar.
+		if n := len(calls); n < 945 || n > 953 {
+			t.Errorf("%d calls in 10 s, want 945 to 953", n)
 		}
-		if w := maxInWindow(calls, time.Second); w > 100 {
-			t.Errorf("a 1 s window holds %d calls, want at most 100", w)
+		// Pay kadar geciken çağrı bile bir saniyelik pencereye yüzden fazla çağrı sokamaz.
+		if w := maxInWindow(calls, time.Second+Headroom); w > RatePerSecond {
+			t.Errorf("a %v window holds %d calls, want at most %d", time.Second+Headroom, w, RatePerSecond)
 		}
 	})
 }

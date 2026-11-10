@@ -603,7 +603,7 @@ func TestStalledClaimsDoNotBurstTheProvider(t *testing.T) {
 		})
 	}
 	// Eski sırada her işçi bu sürede bir jeton alır ve kapı açılınca hepsi birden çağırırdı.
-	time.Sleep(time.Duration(workers) * time.Second / RatePerSecond * 2)
+	time.Sleep(time.Duration(workers) * Interval * 2)
 	close(db.gate)
 	wg.Wait()
 
@@ -620,8 +620,7 @@ func TestStalledClaimsDoNotBurstTheProvider(t *testing.T) {
 		}
 		worst = max(worst, n)
 	}
-	// Sınırlayıcı ilk jetonu beklemeden verir, bu yüzden yarı açık pencerede en çok yüz bir çağrı olur.
-	if worst > RatePerSecond+1 {
+	if worst > RatePerSecond {
 		t.Errorf("%d provider calls inside one second, want at most %d", worst, RatePerSecond)
 	}
 }
