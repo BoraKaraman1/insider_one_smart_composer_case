@@ -9,22 +9,22 @@ defineEmits<{ save: [] }>()
 
 <template>
   <section>
-    <h2>Metin</h2>
-    <p class="muted">Değişkenler: first_name, last_name, city, campaign_url. Bağlantı yalnızca campaign_url ile eklenir.</p>
-    <label for="sms">SMS metni <span class="muted">({{ draft.sms.length }} karakter)</span></label>
+    <h2>Copy</h2>
+    <p class="muted">Variables: first_name, last_name, city, campaign_url. Links only through campaign_url.</p>
+    <label for="sms">SMS body <span class="muted">({{ draft.sms.length }} characters)</span></label>
     <textarea id="sms" v-model="draft.sms" rows="3" :readonly="readonly" />
     <IssueList :issues="issues?.sms" />
-    <label for="subject">E-posta konusu</label>
+    <label for="subject">Email subject</label>
     <input id="subject" v-model="draft.subject" type="text" :readonly="readonly" />
     <IssueList :issues="issues?.emailSubject" />
-    <label for="body">E-posta gövdesi</label>
+    <label for="body">Email body</label>
     <textarea id="body" v-model="draft.body" rows="8" :readonly="readonly" />
     <IssueList :issues="issues?.emailBody" />
     <IssueList :issues="issues?.form" />
     <IssueList :issues="warnings" warn />
     <p v-if="!readonly">
-      <button type="button" class="primary" :disabled="busy || !dirty" @click="$emit('save')">Düzenlemeyi kaydet</button>
-      <span v-if="dirty" class="muted">Kaydedilmemiş değişiklikler</span>
+      <button type="button" class="primary" :disabled="busy || !dirty" @click="$emit('save')">Save edit</button>
+      <span v-if="dirty" class="muted">Unsaved changes</span>
     </p>
   </section>
 </template>

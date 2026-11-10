@@ -11,6 +11,14 @@ const brief = ref('')
 const campaignUrl = ref('')
 const busy = ref(false)
 const issues = ref<Issue[]>([])
+// Valid for the default CAMPAIGN_URL_HOSTS (shop.example). Keep them under 40 characters.
+const exampleUrls = [
+  'https://shop.example/summer-sale',
+  'https://shop.example/cart-reminder',
+  'https://shop.example/welcome-back',
+  'https://shop.example/new-arrivals',
+  'https://shop.example/loyalty',
+]
 
 async function submit() {
   busy.value = true
@@ -33,15 +41,19 @@ async function submit() {
 
 <template>
   <section>
-    <h2>Yeni kampanya</h2>
+    <h2>New campaign</h2>
     <form @submit.prevent="submit">
-      <label for="brief">Brif</label>
-      <textarea id="brief" v-model="brief" rows="5" placeholder="Kim, ne almalı ve neden?" />
-      <label for="url">Kampanya bağlantısı</label>
-      <input id="url" v-model="campaignUrl" type="url" placeholder="https://shop.example/kampanya" />
-      <p class="muted">Mesajlar yalnızca bu bağlantıya, campaign_url değişkeniyle yönlendirir.</p>
+      <label for="brief">Brief</label>
+      <textarea id="brief" v-model="brief" rows="5" placeholder="Who should get what, and why." />
+      <label for="url">Campaign URL</label>
+      <input id="url" v-model="campaignUrl" type="url" list="example-urls" placeholder="https://shop.example/summer-sale" />
+      <datalist id="example-urls"><option v-for="u in exampleUrls" :key="u" :value="u" /></datalist>
+      <p class="muted">Messages link only to this URL, through the campaign_url variable. Try an example:</p>
+      <div class="chips">
+        <button v-for="u in exampleUrls" :key="u" type="button" class="chip" :aria-pressed="campaignUrl === u" @click="campaignUrl = u">{{ u.replace('https://', '') }}</button>
+      </div>
       <IssueList :issues="issues" />
-      <button type="submit" class="primary" :disabled="busy || !brief.trim()">Üret</button>
+      <button type="submit" class="primary" :disabled="busy || !brief.trim()">Generate</button>
     </form>
   </section>
 </template>

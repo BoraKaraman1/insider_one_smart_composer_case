@@ -37,14 +37,14 @@ function total(c: Record<string, number>) {
 
 <template>
   <section>
-    <h2>Teslimat</h2>
+    <h2>Delivery</h2>
     <p class="muted">
-      <span v-if="ago !== null">Son güncelleme {{ ago }} sn önce.</span>
-      <span v-if="p.stale.value" class="error"> Eski veri: son güncelleme başarısız, yeniden deneniyor.</span>
-      <span v-if="!p.polling.value"> Bitti, artık sorgulanmıyor.</span>
+      <span v-if="ago !== null">Last updated {{ ago }} s ago.</span>
+      <span v-if="p.stale.value" class="error"> Stale: the last update failed, retrying.</span>
+      <span v-if="!p.polling.value"> Finished, no longer polling.</span>
     </p>
     <div v-for="(counts, channel) in p.stats.value?.channels ?? {}" :key="channel">
-      <strong>{{ channelName(channel) }}</strong> <span class="muted">{{ total(counts) }} mesaj</span>
+      <strong>{{ channelName(channel) }}</strong> <span class="muted">{{ total(counts) }} messages</span>
       <div class="bar">
         <span
           v-for="s in states"

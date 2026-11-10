@@ -7,13 +7,13 @@ defineProps<{ events: AuditEvent[] }>()
 
 <template>
   <section>
-    <h2>Denetim kaydı</h2>
+    <h2>Audit trail</h2>
     <div class="table-scroll">
       <table>
         <tbody>
           <tr v-for="(e, n) in events" :key="n">
-            <td>{{ new Date(e.at).toLocaleString('tr-TR') }}</td>
-            <td>{{ e.from_state ? campaignState(e.from_state) : 'yok' }} → {{ campaignState(e.to_state) }}</td>
+            <td>{{ new Date(e.at).toLocaleString() }}</td>
+            <td>{{ e.from_state ? campaignState(e.from_state) : 'none' }} to {{ campaignState(e.to_state) }}</td>
             <td>{{ e.actor }}</td>
             <td>{{ e.reason }}</td>
           </tr>

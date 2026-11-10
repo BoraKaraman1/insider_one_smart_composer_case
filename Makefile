@@ -28,6 +28,14 @@ eval:
 	docker compose exec -T postgres-test psql -q -U postgres -c 'DROP DATABASE IF EXISTS app_template' -c 'CREATE DATABASE app_template'; \
 	DATABASE_URL='$(TEMPLATE_URL)' go run ./cmd/app migrate; \
 	DATABASE_URL='$(TEMPLATE_URL)' go run ./cmd/app seed -as-of 2026-01-01T00:00:00Z -seed 42 -users 5000; \
+	if [ "$${LLM_MODE:-mock}" = anthropic ] && [ -f .env ]; then \
+		for v in ANTHROPIC_API_KEY ANTHROPIC_MODEL; do \
+			if [ -z "$$(printenv $$v || true)" ]; then \
+				val=$$(set -a; . ./.env; printenv $$v || true); \
+				if [ -n "$$val" ]; then export "$$v=$$val"; fi; \
+			fi; \
+		done; \
+	fi; \
 	LLM_MODE="$${LLM_MODE:-mock}" EVAL_ADMIN_URL='$(TEST_PG)/postgres?sslmode=disable' go run ./cmd/app eval
 
 web-test:

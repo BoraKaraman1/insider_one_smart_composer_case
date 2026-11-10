@@ -7,12 +7,12 @@ defineProps<{ items: AttentionItem[] }>()
 
 <template>
   <div>
-    <h2>İlgi gerekiyor</h2>
-    <p v-if="!items.length" class="muted">Takılan veya başarısız mesaj yok.</p>
+    <h2>Needs attention</h2>
+    <p v-if="!items.length" class="muted">Nothing stuck or failed.</p>
     <div v-else class="table-scroll">
     <table>
       <thead>
-        <tr><th>Mesaj</th><th>Kanal</th><th>Durum</th><th>Neden</th><th>Deneme</th><th>Son hata</th><th>Sonraki deneme</th></tr>
+        <tr><th>Message</th><th>Channel</th><th>State</th><th>Reason</th><th>Attempts</th><th>Last error</th><th>Next attempt</th></tr>
       </thead>
       <tbody>
         <tr v-for="m in items" :key="m.id">

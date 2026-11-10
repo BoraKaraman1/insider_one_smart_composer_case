@@ -12,7 +12,7 @@ import SegmentCard from '../components/SegmentCard.vue'
 import { useCampaign } from '../composables/useCampaign'
 import { useDraft } from '../composables/useDraft'
 import { useGeneration } from '../composables/useGeneration'
-import { campaignState } from '../labels'
+import { campaignState, campaignTone, isFinished } from '../labels'
 import { api, clearToken, token } from '../session'
 
 const props = defineProps<{ id: string }>()
@@ -57,7 +57,7 @@ function setView(v: CampaignView | null) {
 }
 
 async function save() {
-  const r = await c.act('Kaydetme', () => d.save((body) => api.saveRevision(props.id, body)))
+  const r = await c.act('Save', () => d.save((body) => api.saveRevision(props.id, body)))
   // Görünüm taslağın tabanı yenilendikten sonra değişir ki izleyici bunu çakışma sanmasın.
   if (r === 'saved') setView(d.latest.value)
   if (r === 'conflict') await c.reload()
@@ -78,19 +78,19 @@ async function approve() {
   const v = campaign.value
   const shown = d.approval()
   if (!v || !shown) return
-  setView(await c.act('Onaylama', () => api.approve(props.id, shown, v.version)))
+  setView(await c.act('Approve', () => api.approve(props.id, shown, v.version)))
 }
 
 async function reject() {
-  if (!campaign.value || !confirm('Bu kampanya reddedilsin mi? Yeniden açılamaz.')) return
+  if (!campaign.value || !confirm('Reject this campaign? It cannot be reopened.')) return
   const version = campaign.value.version
-  setView(await c.act('Reddetme', () => api.reject(props.id, version)))
+  setView(await c.act('Reject', () => api.reject(props.id, version)))
 }
 
 async function cancel() {
-  if (!campaign.value || !confirm('Bu kampanya iptal edilsin mi? Henüz gönderilmeyen mesajlar atlanır.')) return
+  if (!campaign.value || !confirm('Cancel this campaign? Messages not yet sent are skipped.')) return
   const version = campaign.value.version
-  const v = await c.act('İptal', () => api.cancel(props.id, version))
+  const v = await c.act('Cancel', () => api.cancel(props.id, version))
   if (v) {
     g.stop()
     setView(v)
@@ -99,9 +99,9 @@ async function cancel() {
 
 async function regenerate() {
   if (!campaign.value) return
-  if (d.dirty.value && !confirm('Yeniden üretmek kaydedilmemiş düzenlemelerinizi siler. Devam edilsin mi?')) return
+  if (d.dirty.value && !confirm('Regenerating discards your unsaved edits. Continue?')) return
   const version = campaign.value.version
-  const r = await c.act('Yeniden üretme', () => api.generate(props.id, version))
+  const r = await c.act('Regenerate', () => api.generate(props.id, version))
   if (!r) return
   replaceDraft = true
   await c.reload()
@@ -114,25 +114,30 @@ async function regenerate() {
   <p v-if="c.notice.value" class="notice">{{ c.notice.value }}</p>
   <template v-if="campaign">
     <section>
-      <h2>Kampanya <span class="muted">{{ campaignState(campaign.state) }}, sürüm {{ campaign.version }}</span></h2>
-      <p>{{ campaign.brief }}</p>
-      <p class="muted">Bağlantılar şuraya gider: {{ campaign.campaign_url }}</p>
+      <div class="summary-head">
+        <h2>Campaign</h2>
+        <span class="badge" :class="`tone-${campaignTone(campaign.state)}`">{{ campaignState(campaign.state) }}</span>
+        <span class="muted">version {{ campaign.version }}</span>
+      </div>
+      <p class="brief">{{ campaign.brief }}</p>
+      <p class="muted">Links go to <code>{{ campaign.campaign_url }}</code></p>
+      <p v-if="isFinished(campaign.state)" class="next">
+        This campaign is closed. <RouterLink to="/" class="button primary">Start a new campaign</RouterLink>
+      </p>
     </section>
 
-    <ApproveBar :state="campaign.state" :busy="c.busy.value" :dirty="!d.approvable.value" @approve="approve" @reject="reject" @regenerate="regenerate" @cancel="cancel" />
-
-    <p v-if="g.endedEarly.value" class="notice">Üretim akışı erken bitti. Kampanya kayıtlı haliyle gösteriliyor.</p>
+    <p v-if="g.endedEarly.value" class="notice">The generation stream ended early. Showing the campaign as stored.</p>
     <p v-if="g.error.value" class="error">{{ g.error.value }}</p>
 
     <template v-if="generating">
       <SegmentCard v-if="streamed" :rule="streamed.rule" :description="streamed.description" :counts="streamed.counts" />
-      <p v-else class="muted">Segment seçiliyor...</p>
+      <p v-else class="muted">Choosing the segment...</p>
       <IssueList :issues="g.state.value.errors as Issue[]" />
       <section class="provisional">
-        <h2>Metin <span class="muted">geçici, deneme {{ g.state.value.attempt || 1 }}</span></h2>
+        <h2>Copy <span class="muted">provisional, attempt {{ g.state.value.attempt || 1 }}</span></h2>
         <p><strong>SMS</strong><br />{{ g.state.value.fields['sms.body'] ?? '' }}</p>
-        <p><strong>Konu</strong><br />{{ g.state.value.fields['email.subject'] ?? '' }}</p>
-        <p><strong>Gövde</strong><br />{{ g.state.value.fields['email.body'] ?? '' }}</p>
+        <p><strong>Subject</strong><br />{{ g.state.value.fields['email.subject'] ?? '' }}</p>
+        <p><strong>Body</strong><br />{{ g.state.value.fields['email.body'] ?? '' }}</p>
       </section>
     </template>
 
@@ -162,6 +167,8 @@ async function regenerate() {
         />
       </template>
     </template>
+
+    <ApproveBar :state="campaign.state" :busy="c.busy.value" :dirty="!d.approvable.value" @approve="approve" @reject="reject" @regenerate="regenerate" @cancel="cancel" />
 
     <DeliveryDashboard v-if="delivery" :campaign-id="campaign.id" @view="setView" />
     <AuditTrail :events="c.view.value?.events ?? []" />

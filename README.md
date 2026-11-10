@@ -43,6 +43,8 @@ To measure the model, in your own terminal:
 LLM_MODE=anthropic make eval
 ```
 
+With `ANTHROPIC_API_KEY` in `.env`, `make eval` finds it. If the shell already exports the key, that one wins. `make test` never reads it.
+
 That writes `evals/report-anthropic.md`. Keep the two reports apart. The report has no key and no recipient data.
 
 ## What to alert on

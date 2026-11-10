@@ -56,7 +56,7 @@ export function useGeneration(opts: GenerationOptions) {
         return v
       } catch (e) {
         if (signal.aborted || fatal(e)) return null
-        error.value = 'Kampanya yeniden yüklenemedi, yeniden deneniyor.'
+        error.value = 'Could not reload the campaign; retrying.'
       }
       await sleep(delay, signal)
     }
@@ -95,7 +95,7 @@ export function useGeneration(opts: GenerationOptions) {
         error.value = null
       } catch (e) {
         if (signal.aborted || fatal(e)) return
-        error.value = 'Olay akışı koptu, yeniden bağlanılıyor.'
+        error.value = 'The event stream dropped; reconnecting.'
       }
       const phase = state.value.phase
       if (phase === 'done' || phase === 'failed') {

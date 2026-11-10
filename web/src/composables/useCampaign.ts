@@ -30,10 +30,10 @@ export function useCampaign(id: Ref<string>, api: Api) {
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         const now = (await reload())?.campaign
-        const what = before && now ? ` Önceki durum: ${campaignState(before.state)}, sürüm ${before.version}. Şimdi: ${campaignState(now.state)}, sürüm ${now.version}.` : ''
-        notice.value = `${name} uygulanamadı: ${e.message}.${what} Kaydedilmemiş düzenlemeleriniz korundu.`
+        const what = before && now ? ` It was ${campaignState(before.state)} at version ${before.version}; it is now ${campaignState(now.state)} at version ${now.version}.` : ''
+        notice.value = `${name} did not apply: ${e.message}.${what} Your unsaved edits are kept.`
       } else {
-        error.value = `${name} başarısız: ${e instanceof Error ? e.message : String(e)}`
+        error.value = `${name} failed: ${e instanceof Error ? e.message : String(e)}`
       }
       return null
     } finally {

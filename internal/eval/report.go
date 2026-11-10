@@ -79,7 +79,11 @@ func (r Report) Markdown() string {
 		for i, f := range c.Result.Failed {
 			failed[i] = string(f)
 		}
-		p("| %s | %s | %d | %s | %t | %s | %s | %d | %d |\n", c.Name, c.Category, c.Run, c.Outcome, c.Result.Correct,
+		correct := fmt.Sprint(c.Result.Correct)
+		if c.Result.Injection != InjectionNone {
+			correct = "n/a"
+		}
+		p("| %s | %s | %d | %s | %s | %s | %s | %d | %d |\n", c.Name, c.Category, c.Run, c.Outcome, correct,
 			c.Result.Injection, strings.Join(failed, ", "), c.Total, c.GenerationMS)
 	}
 	return b.String()

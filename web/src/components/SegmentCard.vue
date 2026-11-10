@@ -16,11 +16,11 @@ defineProps<{
     <h2>Segment</h2>
     <p v-if="description">{{ description }}</p>
     <p v-if="counts" class="muted">
-      Kitle {{ counts.total ?? '?' }}, SMS uygun {{ counts.sms_eligible ?? '?' }}, e-posta uygun
+      Audience {{ counts.total ?? '?' }}, SMS eligible {{ counts.sms_eligible ?? '?' }}, email eligible
       {{ counts.email_eligible ?? '?' }}
     </p>
     <details>
-      <summary>Kural</summary>
+      <summary>Rule</summary>
       <pre>{{ JSON.stringify(rule, null, 2) }}</pre>
     </details>
     <IssueList :issues="issues" />
