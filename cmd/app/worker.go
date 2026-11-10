@@ -110,6 +110,12 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		return err
 	}
 	ready.Store(true)
+	recCtx, recStop := context.WithCancel(ctx)
+	recDone := make(chan struct{})
+	go func() {
+		defer close(recDone)
+		delivery.ReconcileLoop(recCtx, pool, log, reg, delivery.ReconcileEvery)
+	}()
 	log.Info("worker started", "llm_mode", getenv("LLM_MODE"), "model", client.Model(), "anthropic_key", keyState(getenv("LLM_MODE")))
 	var serveErr error
 	select {
@@ -118,6 +124,8 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		log.Error("worker metrics listener failed; stopping", "error", serveErr)
 	}
 	ready.Store(false)
+	recStop()
+	<-recDone
 	stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err = rc.Stop(stop)

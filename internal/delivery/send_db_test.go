@@ -3,8 +3,10 @@ package delivery
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -236,14 +238,16 @@ func TestDeadAfterMaxAge(t *testing.T) {
 		young, e.now.Add(-14*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	e.prov.force(old, "503")
 	e.prov.force(young, "503")
 
-	if err := e.work(old); err != nil && !cancelled(err) {
+	if err := e.work(old); err != nil {
 		t.Errorf("old message: %v; want no retry", err)
 	}
-	if m := loadMessage(t, e.pool, old); m.State != "dead" || m.Attempts != 2 {
-		t.Errorf("old message: %+v; want dead after its second attempt", m)
+	if m := loadMessage(t, e.pool, old); m.State != "dead" || m.Attempts != 1 || str(m.LastErrorClass) != "server_error" {
+		t.Errorf("old message: %+v; want dead with no new attempt", m)
+	}
+	if n := len(e.prov.callsFor(old)); n != 0 {
+		t.Errorf("%d provider calls for a message past its age limit, want 0 even though the provider would accept it", n)
 	}
 	if _, ok := snoozed(e.work(young)); !ok {
 		t.Error("a message 14 minutes into its retries was not retried")
@@ -459,12 +463,28 @@ func (h hookLimiter) Wait(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
+// İlk sahiplenme sorgusundan hemen önce bir kez çalışır.
+type beforeClaimDB struct {
+	*pgxpool.Pool
+	once sync.Once
+	hook func()
+}
+
+func isClaim(sql string) bool { return strings.Contains(sql, "SET state = 'sending'") }
+
+func (d *beforeClaimDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if isClaim(sql) {
+		d.once.Do(d.hook)
+	}
+	return d.Pool.QueryRow(ctx, sql, args...)
+}
+
+func TestConsentRevokedBeforeClaim(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
 	user := consentingUsers(t, e.pool, 1)[0]
 	id := insertMessage(t, e.pool, c, user, "sms", "")
-	e.worker.Limiters["sms"] = hookLimiter{during: func() {
+	e.worker.DB = &beforeClaimDB{Pool: e.pool, hook: func() {
 		if _, err := e.pool.Exec(context.Background(), `UPDATE users SET consent_sms = false WHERE id = $1`, user); err != nil {
 			t.Error(err)
 		}
@@ -476,6 +496,9 @@ func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
 	if n := len(e.prov.callsFor(id)); n != 0 {
 		t.Fatalf("%d provider calls after consent was revoked", n)
 	}
+	if e.tokensTaken() != 0 {
+		t.Errorf("%d tokens taken for a message that was never sent", e.tokensTaken())
+	}
 	if m := loadMessage(t, e.pool, id); m.State != "skipped" || str(m.LastErrorClass) != "no_consent" || m.Attempts != 0 {
 		t.Errorf("message %+v; want skipped, no_consent, 0 attempts", m)
 	}
@@ -484,11 +507,11 @@ func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
 	}
 }
 
-func TestCancelledWhileWaitingForToken(t *testing.T) {
+func TestCancelledBeforeClaim(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
 	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
-	e.worker.Limiters["sms"] = hookLimiter{during: func() {
+	e.worker.DB = &beforeClaimDB{Pool: e.pool, hook: func() {
 		if _, err := e.pool.Exec(context.Background(), `UPDATE campaigns SET state = 'cancelled' WHERE id = $1`, c.ID); err != nil {
 			t.Error(err)
 		}
@@ -502,6 +525,152 @@ func TestCancelledWhileWaitingForToken(t *testing.T) {
 	}
 	if m := loadMessage(t, e.pool, id); m.State != "skipped" || str(m.LastErrorClass) != "cancelled" {
 		t.Errorf("message %+v; want skipped, cancelled", m)
+	}
+}
+
+func TestTokenIsTakenAfterTheClaim(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	waits := 0
+	e.worker.Limiters["sms"] = hookLimiter{during: func() {
+		waits++
+		if m := loadMessage(t, e.pool, id); m.State != "sending" || m.Attempts != 1 {
+			t.Errorf("at the limiter the message is %+v; want it already claimed, so no database work sits between the token and the call", m)
+		}
+		if n := len(e.prov.callsFor(id)); n != 0 {
+			t.Errorf("%d provider calls before the token", n)
+		}
+	}}
+	if err := e.work(id); err != nil {
+		t.Fatalf("work: %v", err)
+	}
+	if waits != 1 || len(e.prov.callsFor(id)) != 1 {
+		t.Errorf("%d limiter waits and %d provider calls, want 1 and 1", waits, len(e.prov.callsFor(id)))
+	}
+}
+
+// Sahiplenme sorguları kapı açılana kadar bekler, havuz sıkışması gibi.
+type stallClaimDB struct {
+	*pgxpool.Pool
+	gate chan struct{}
+}
+
+func (d *stallClaimDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if isClaim(sql) {
+		<-d.gate
+	}
+	return d.Pool.QueryRow(ctx, sql, args...)
+}
+
+type dispatchRecorder struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (r *dispatchRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.times = append(r.times, time.Now())
+	r.mu.Unlock()
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestStalledClaimsDoNotBurstTheProvider(t *testing.T) {
+	const messages = 130
+	workers := jobs.QueueWorkers[jobs.QueueSMS]
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	ids := make(chan string, messages)
+	for _, u := range consentingUsers(t, e.pool, messages) {
+		ids <- insertMessage(t, e.pool, c, u, "sms", "")
+	}
+	close(ids)
+	db := &stallClaimDB{Pool: e.pool, gate: make(chan struct{})}
+	rec := &dispatchRecorder{}
+	e.worker.DB = db
+	e.worker.Limiters = map[string]Limiter{"sms": NewLimiter()}
+	e.worker.ProviderTimeout = ProviderTimeout
+	e.worker.Client = &http.Client{Transport: rec}
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for id := range ids {
+				if err := e.work(id); err != nil {
+					t.Errorf("work: %v", err)
+				}
+			}
+		})
+	}
+	// Eski sırada her işçi bu sürede bir jeton alır ve kapı açılınca hepsi birden çağırırdı.
+	time.Sleep(time.Duration(workers) * time.Second / RatePerSecond * 2)
+	close(db.gate)
+	wg.Wait()
+
+	if len(rec.times) != messages {
+		t.Fatalf("%d provider calls, want %d", len(rec.times), messages)
+	}
+	worst := 0
+	for i, start := range rec.times {
+		n := 0
+		for _, at := range rec.times[i:] {
+			if at.Sub(start) < time.Second {
+				n++
+			}
+		}
+		worst = max(worst, n)
+	}
+	// Sınırlayıcı ilk jetonu beklemeden verir, bu yüzden yarı açık pencerede en çok yüz bir çağrı olur.
+	if worst > RatePerSecond+1 {
+		t.Errorf("%d provider calls inside one second, want at most %d", worst, RatePerSecond)
+	}
+}
+
+func TestExhaustedMessagesAreNotSentAgain(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	users := consentingUsers(t, e.pool, 2)
+	// Biri çöken denemeden kalmış, öteki yeniden deneme sırasında.
+	reclaimed := insertMessage(t, e.pool, c, users[0], "sms", "")
+	queued := insertMessage(t, e.pool, c, users[1], "sms", "")
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `UPDATE messages SET state = 'sending', attempts = $2, first_attempt_at = $3 WHERE id = $1`,
+		reclaimed, MaxAttempts, e.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE messages SET attempts = $2, last_error_class = 'rate_limited', last_error = 'provider answered 429',
+		first_attempt_at = $3 WHERE id = $1`, queued, MaxAttempts, e.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{reclaimed, queued} {
+		if err := e.work(id); err != nil {
+			t.Fatalf("work: %v", err)
+		}
+		if m := loadMessage(t, e.pool, id); m.State != "dead" || m.Attempts != MaxAttempts {
+			t.Errorf("message %+v; want dead with %d attempts", m, MaxAttempts)
+		}
+	}
+	if n := len(e.prov.all()); n != 0 {
+		t.Errorf("%d provider calls for messages that had used all %d attempts", n, MaxAttempts)
+	}
+	if e.tokensTaken() != 0 {
+		t.Errorf("%d tokens taken", e.tokensTaken())
+	}
+	var unknown, known string
+	if err := e.pool.QueryRow(ctx, `SELECT last_error FROM messages WHERE id = $1`, reclaimed).Scan(&unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pool.QueryRow(ctx, `SELECT last_error FROM messages WHERE id = $1`, queued).Scan(&known); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unknown, "unknown") {
+		t.Errorf("last_error %q; a message that died mid-attempt must say its outcome is unknown", unknown)
+	}
+	if known != "provider answered 429" || str(loadMessage(t, e.pool, queued).LastErrorClass) != "rate_limited" {
+		t.Errorf("last_error %q; a queued message keeps the error of its last attempt", known)
+	}
+	if state, _ := campaignState(t, e.pool, c.ID); state != "completed_with_failures" {
+		t.Errorf("campaign %s, want completed_with_failures", state)
 	}
 }
 

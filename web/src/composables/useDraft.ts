@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
 import { ApiError } from '../api/client'
 import { mapIssues, type IssueMap } from '../api/issues'
 import type { CampaignView, RevisionRequest } from '../api/types'
@@ -49,20 +49,43 @@ export function useDraft() {
     issues.value = null
   }
 
+  const approvable = computed(() => !!base.value && !dirty.value && !conflict.value)
+
+  function start(v: CampaignView) {
+    latest.value = v
+    if (draft.value === null) reset(v)
+  }
+
+  // Temiz taslak yeni sürüme geçer, düzenlenmiş taslak korunur ve çakışma olarak işaretlenir.
+  function observe(v: CampaignView) {
+    latest.value = v
+    const b = base.value
+    if (!v.revision || !b || v.revision.id === b.revisionId) return
+    if (dirty.value || conflict.value) conflict.value = true
+    else reset(v)
+  }
+
   return {
     draft,
     dirty,
+    approvable,
     conflict,
     issues,
     latest,
+    start,
+    observe,
 
-    start(v: CampaignView) {
-      latest.value = v
-      if (draft.value === null) reset(v)
+    track(view: Ref<CampaignView | null>) {
+      watch(view, (v) => {
+        if (!v) return
+        if (draft.value === null) start(v)
+        else observe(v)
+      })
     },
 
-    observe(v: CampaignView) {
-      latest.value = v
+    // Onay ekrandaki sürümle gider, görünmeyen ya da çakışan sürüm onaylanamaz.
+    approval(): string | null {
+      return approvable.value ? base.value!.revisionId : null
     },
 
     body(): RevisionRequest {

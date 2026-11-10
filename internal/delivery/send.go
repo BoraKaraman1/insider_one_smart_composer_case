@@ -103,13 +103,8 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	if lim == nil {
 		return fmt.Errorf("send: no limiter for channel %q", m.Channel)
 	}
-	waitStart := time.Now()
-	if err := lim.Wait(ctx); err != nil {
-		return err
-	}
-	met.LimiterWait(m.Channel, time.Since(waitStart))
 	now := w.Now()
-	attempts, first, ok, err := store.ClaimMessage(ctx, w.DB, id, now)
+	attempts, first, ok, err := store.ClaimMessage(ctx, w.DB, id, now, MaxAttempts, MaxAge)
 	if err != nil {
 		return err
 	}
@@ -133,6 +128,12 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 		}
 		return w.finish(ctx, log, m, river.JobCancel(err))
 	}
+	// Jeton çağrıdan hemen önce alınır ki veritabanı gecikmesi çağrıları yığmasın.
+	waitStart := time.Now()
+	if err := lim.Wait(ctx); err != nil {
+		return err
+	}
+	met.LimiterWait(m.Channel, time.Since(waitStart))
 	callStart := time.Now()
 	providerID, res, lastErr := w.post(ctx, id, payload)
 	met.ProviderRequest(m.Channel, string(res.Class), time.Since(callStart))
@@ -195,8 +196,27 @@ func (w *SendWorker) gate(ctx context.Context, log *slog.Logger, m store.Send) (
 		return true, w.skip(ctx, log, m, "cancelled")
 	case !m.Consent:
 		return true, w.skip(ctx, log, m, "no_consent")
+	case exhausted(m, w.Now()):
+		return true, w.expire(ctx, log, m)
 	}
 	return false, nil
+}
+
+func exhausted(m store.Send, now time.Time) bool {
+	return m.Attempts >= MaxAttempts || (m.FirstAttemptAt != nil && now.Sub(*m.FirstAttemptAt) >= MaxAge)
+}
+
+// Sınırı dolmuş mesaj sağlayıcıya bir kez daha gitmeden ölü sayılır.
+func (w *SendWorker) expire(ctx context.Context, log *slog.Logger, m store.Send) error {
+	ok, err := store.ExpireMessage(ctx, w.DB, m.ID, w.Now(), MaxAttempts, MaxAge)
+	if err != nil {
+		return err
+	}
+	if ok {
+		w.metrics().Message(m.Channel, "dead")
+	}
+	log.Warn("message dead", "channel", m.Channel, "reason", "retry budget exhausted", "attempts", m.Attempts)
+	return w.finish(ctx, log, m, nil)
 }
 
 func (w *SendWorker) skip(ctx context.Context, log *slog.Logger, m store.Send, class string) error {

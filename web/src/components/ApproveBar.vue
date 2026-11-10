@@ -7,24 +7,25 @@ defineEmits<{ approve: []; reject: []; regenerate: []; cancel: [] }>()
 
 <template>
   <section>
-    <button v-if="state === 'in_review'" type="button" :disabled="busy || dirty" @click="$emit('approve')">Approve</button>
-    <button v-if="state === 'in_review'" type="button" :disabled="busy" @click="$emit('reject')">Reject</button>
+    <button v-if="state === 'in_review'" type="button" class="primary" :disabled="busy || dirty" @click="$emit('approve')">Onayla</button>
+    <button v-if="state === 'in_review'" type="button" class="danger" :disabled="busy" @click="$emit('reject')">Reddet</button>
     <button
       v-if="state === 'in_review' || state === 'generation_failed' || state === 'draft'"
       type="button"
       :disabled="busy"
       @click="$emit('regenerate')"
     >
-      {{ state === 'draft' ? 'Generate' : 'Regenerate' }}
+      {{ state === 'draft' ? 'Üret' : 'Yeniden üret' }}
     </button>
     <button
       v-if="['draft', 'generating', 'in_review', 'generation_failed', 'approved', 'sending'].includes(state)"
       type="button"
+      class="danger"
       :disabled="busy"
       @click="$emit('cancel')"
     >
-      Cancel campaign
+      Kampanyayı iptal et
     </button>
-    <span v-if="state === 'in_review' && dirty" class="muted">Save or discard your edits before approving.</span>
+    <span v-if="state === 'in_review' && dirty" class="muted">Onaylamadan önce düzenlemelerinizi kaydedin veya bırakın.</span>
   </section>
 </template>

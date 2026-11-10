@@ -33,15 +33,15 @@ async function submit() {
 
 <template>
   <section>
-    <h2>New campaign</h2>
+    <h2>Yeni kampanya</h2>
     <form @submit.prevent="submit">
-      <label for="brief">Brief</label>
-      <textarea id="brief" v-model="brief" rows="5" placeholder="Who should get what, and why." />
-      <label for="url">Campaign URL</label>
+      <label for="brief">Brif</label>
+      <textarea id="brief" v-model="brief" rows="5" placeholder="Kim, ne almalı ve neden?" />
+      <label for="url">Kampanya bağlantısı</label>
       <input id="url" v-model="campaignUrl" type="url" placeholder="https://shop.example/kampanya" />
-      <p class="muted">Messages link only to this URL, through the campaign_url variable.</p>
+      <p class="muted">Mesajlar yalnızca bu bağlantıya, campaign_url değişkeniyle yönlendirir.</p>
       <IssueList :issues="issues" />
-      <button type="submit" :disabled="busy || !brief.trim()">Generate</button>
+      <button type="submit" class="primary" :disabled="busy || !brief.trim()">Üret</button>
     </form>
   </section>
 </template>

@@ -9,6 +9,7 @@ import (
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
 var ErrNoRecipients = errors.New("campaign: no recipient has consent on any channel")
@@ -75,6 +76,43 @@ func CompleteIfDone(ctx context.Context, db Beginner, id string) error {
 			to = CompletedWithFailures
 		}
 		return Transition(ctx, tx, Move{ID: id, From: Sending, To: to, Version: c.Version, Actor: WorkerActor, Reason: "all messages finished"})
+	})
+	if errors.Is(err, ErrConflict) {
+		return nil
+	}
+	return err
+}
+
+const (
+	ReasonJobExhausted = "job_exhausted"
+	ReasonFanoutFailed = "fan-out failed"
+)
+
+// İşi tükenen üretim başarısıza çekilir, sürüm tutmazsa hiçbir şey yazılmaz.
+func FailStrandedGeneration(ctx context.Context, db Beginner, id string, version int) error {
+	err := inTx(ctx, db, func(tx pgx.Tx) error {
+		ok, err := store.LockGenerating(ctx, tx, id, version)
+		if err != nil || !ok {
+			return err
+		}
+		if err := Transition(ctx, tx, Move{ID: id, From: Generating, To: GenerationFailed, Version: version,
+			Actor: WorkerActor, Reason: ReasonJobExhausted}); err != nil {
+			return err
+		}
+		_, err = store.InsertGenerationEvent(ctx, tx, id, "failed", map[string]any{"reason": ReasonJobExhausted,
+			"errors": []validation.Issue{{Code: ReasonJobExhausted, Message: "the generation job ran out of retries; generate again"}}})
+		return err
+	})
+	if errors.Is(err, ErrConflict) {
+		return nil
+	}
+	return err
+}
+
+// Dağıtımı tükenen onaylı kampanya iptal edilir çünkü onu gönderime taşıyacak iş kalmamıştır.
+func CancelStrandedFanout(ctx context.Context, db Beginner, id string, version int) error {
+	err := inTx(ctx, db, func(tx pgx.Tx) error {
+		return Transition(ctx, tx, Move{ID: id, From: Approved, To: Cancelled, Version: version, Actor: WorkerActor, Reason: ReasonFanoutFailed})
 	})
 	if errors.Is(err, ErrConflict) {
 		return nil

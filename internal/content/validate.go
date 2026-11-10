@@ -27,8 +27,9 @@ type Content struct {
 
 var (
 	schemeRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://|www\.`)
-	domainRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+` +
-		`(?:com|net|org|info|biz|io|co|ai|app|dev|me|ly|gl|to|cc|tv|xyz|link|shop|store|site|online|tr|eu|uk|de|us))(?:$|[^\p{L}\p{N}_-])`)
+	// Son etiket yalnız harf ya da punycode olur ki sayı ve tek harfli kısaltma alan adı sayılmasın.
+	domainRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{M}\p{N}@._-])((?:[\p{L}\p{M}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+` +
+		`(?:xn--[a-z0-9-]+|\p{L}[\p{L}\p{M}]+))(?:$|[^\p{L}\p{M}\p{N}_-])`)
 	domainPathRe = regexp.MustCompile(`(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}[\p{L}\p{N}-]+/)`)
 	urlBeforeRe  = regexp.MustCompile(`(?:^|[\s\p{Z}])[(\["'“‘«:]*$`)
 	urlAfterRe   = regexp.MustCompile(`^[.,!?;:)\]"'”’»]*(?:[\s\p{Z}]|$)`)
@@ -125,7 +126,8 @@ func checkBans(res *validation.Result, path string, parts []Part) {
 	} else if m := schemeRe.FindString(text); m != "" {
 		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("link %q is not allowed; use {{campaign_url}}", m))
 	} else if m := domainRe.FindStringSubmatch(text); m != nil {
-		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("domain %q is not allowed; use {{campaign_url}}", m[1]))
+		res.Error(path, validation.URLNotAllowed, fmt.Sprintf(
+			"domain %q is not allowed; use {{campaign_url}} for links and put a space after a period that ends a sentence", m[1]))
 	} else if m := domainPathRe.FindStringSubmatch(text); m != nil {
 		res.Error(path, validation.URLNotAllowed, fmt.Sprintf("link %q is not allowed; use {{campaign_url}}", m[1]))
 	} else if m := ipRe.FindStringSubmatch(text); m != nil {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, toRef, watch } from 'vue'
+import { computed, onMounted, toRef } from 'vue'
 import type { Issue } from '../api/issues'
 import type { CampaignView, SegmentReady } from '../api/types'
 import ApproveBar from '../components/ApproveBar.vue'
@@ -12,6 +12,7 @@ import SegmentCard from '../components/SegmentCard.vue'
 import { useCampaign } from '../composables/useCampaign'
 import { useDraft } from '../composables/useDraft'
 import { useGeneration } from '../composables/useGeneration'
+import { campaignState } from '../labels'
 import { api, clearToken, token } from '../session'
 
 const props = defineProps<{ id: string }>()
@@ -23,11 +24,7 @@ const g = useGeneration({
   onUnauthorized: clearToken,
 })
 
-watch(c.view, (v) => {
-  if (!v) return
-  if (d.draft.value === null) d.start(v)
-  else d.observe(v)
-})
+d.track(c.view)
 
 const campaign = computed(() => c.view.value?.campaign ?? null)
 const generating = computed(() => campaign.value?.state === 'generating')
@@ -50,7 +47,9 @@ async function followGeneration(eventsUrl: string) {
 
 onMounted(async () => {
   const v = await c.reload()
-  if (v?.campaign.state === 'generating' && v.generation) void followGeneration(v.generation.events_url)
+  // Başarısız üretimin olayları yeniden okunur ki hata ayrıntısı yenilemeden sonra da görünsün.
+  const state = v?.campaign.state
+  if ((state === 'generating' || state === 'generation_failed') && v?.generation) void followGeneration(v.generation.events_url)
 })
 
 function setView(v: CampaignView | null) {
@@ -58,13 +57,9 @@ function setView(v: CampaignView | null) {
 }
 
 async function save() {
-  const r = await c.act('Save', () =>
-    d.save(async (body) => {
-      const v = await api.saveRevision(props.id, body)
-      c.view.value = v
-      return v
-    }),
-  )
+  const r = await c.act('Kaydetme', () => d.save((body) => api.saveRevision(props.id, body)))
+  // Görünüm taslağın tabanı yenilendikten sonra değişir ki izleyici bunu çakışma sanmasın.
+  if (r === 'saved') setView(d.latest.value)
   if (r === 'conflict') await c.reload()
 }
 
@@ -81,20 +76,21 @@ function useLatest() {
 
 async function approve() {
   const v = campaign.value
-  if (!v?.current_revision_id) return
-  setView(await c.act('Approve', () => api.approve(props.id, v.current_revision_id!, v.version)))
+  const shown = d.approval()
+  if (!v || !shown) return
+  setView(await c.act('Onaylama', () => api.approve(props.id, shown, v.version)))
 }
 
 async function reject() {
-  if (!campaign.value || !confirm('Reject this campaign? It cannot be reopened.')) return
+  if (!campaign.value || !confirm('Bu kampanya reddedilsin mi? Yeniden açılamaz.')) return
   const version = campaign.value.version
-  setView(await c.act('Reject', () => api.reject(props.id, version)))
+  setView(await c.act('Reddetme', () => api.reject(props.id, version)))
 }
 
 async function cancel() {
-  if (!campaign.value || !confirm('Cancel this campaign? Messages not yet sent are skipped.')) return
+  if (!campaign.value || !confirm('Bu kampanya iptal edilsin mi? Henüz gönderilmeyen mesajlar atlanır.')) return
   const version = campaign.value.version
-  const v = await c.act('Cancel', () => api.cancel(props.id, version))
+  const v = await c.act('İptal', () => api.cancel(props.id, version))
   if (v) {
     g.stop()
     setView(v)
@@ -103,9 +99,9 @@ async function cancel() {
 
 async function regenerate() {
   if (!campaign.value) return
-  if (d.dirty.value && !confirm('Regenerating discards your unsaved edits. Continue?')) return
+  if (d.dirty.value && !confirm('Yeniden üretmek kaydedilmemiş düzenlemelerinizi siler. Devam edilsin mi?')) return
   const version = campaign.value.version
-  const r = await c.act('Regenerate', () => api.generate(props.id, version))
+  const r = await c.act('Yeniden üretme', () => api.generate(props.id, version))
   if (!r) return
   replaceDraft = true
   await c.reload()
@@ -118,25 +114,25 @@ async function regenerate() {
   <p v-if="c.notice.value" class="notice">{{ c.notice.value }}</p>
   <template v-if="campaign">
     <section>
-      <h2>Campaign <span class="muted">{{ campaign.state }}, version {{ campaign.version }}</span></h2>
+      <h2>Kampanya <span class="muted">{{ campaignState(campaign.state) }}, sürüm {{ campaign.version }}</span></h2>
       <p>{{ campaign.brief }}</p>
-      <p class="muted">Links go to {{ campaign.campaign_url }}</p>
+      <p class="muted">Bağlantılar şuraya gider: {{ campaign.campaign_url }}</p>
     </section>
 
-    <ApproveBar :state="campaign.state" :busy="c.busy.value" :dirty="d.dirty.value" @approve="approve" @reject="reject" @regenerate="regenerate" @cancel="cancel" />
+    <ApproveBar :state="campaign.state" :busy="c.busy.value" :dirty="!d.approvable.value" @approve="approve" @reject="reject" @regenerate="regenerate" @cancel="cancel" />
 
-    <p v-if="g.endedEarly.value" class="notice">The generation stream ended early. Showing the campaign as stored.</p>
+    <p v-if="g.endedEarly.value" class="notice">Üretim akışı erken bitti. Kampanya kayıtlı haliyle gösteriliyor.</p>
     <p v-if="g.error.value" class="error">{{ g.error.value }}</p>
 
     <template v-if="generating">
       <SegmentCard v-if="streamed" :rule="streamed.rule" :description="streamed.description" :counts="streamed.counts" />
-      <p v-else class="muted">Choosing the segment...</p>
+      <p v-else class="muted">Segment seçiliyor...</p>
       <IssueList :issues="g.state.value.errors as Issue[]" />
       <section class="provisional">
-        <h2>Copy <span class="muted">provisional, attempt {{ g.state.value.attempt || 1 }}</span></h2>
+        <h2>Metin <span class="muted">geçici, deneme {{ g.state.value.attempt || 1 }}</span></h2>
         <p><strong>SMS</strong><br />{{ g.state.value.fields['sms.body'] ?? '' }}</p>
-        <p><strong>Subject</strong><br />{{ g.state.value.fields['email.subject'] ?? '' }}</p>
-        <p><strong>Body</strong><br />{{ g.state.value.fields['email.body'] ?? '' }}</p>
+        <p><strong>Konu</strong><br />{{ g.state.value.fields['email.subject'] ?? '' }}</p>
+        <p><strong>Gövde</strong><br />{{ g.state.value.fields['email.body'] ?? '' }}</p>
       </section>
     </template>
 

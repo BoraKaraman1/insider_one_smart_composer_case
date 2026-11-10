@@ -93,19 +93,32 @@ func SkipMessage(ctx context.Context, db DB, id, class string) (bool, error) {
 		WHERE id = $1 AND state IN ('queued', 'sending')`, id, class))
 }
 
-// Gönderimde kalan mesaj çöken denemeden sonra yeniden alınabilir.
-func ClaimMessage(ctx context.Context, db DB, id string, now time.Time) (attempts int, first time.Time, ok bool, err error) {
+// Gönderimde kalan mesaj çöken denemeden sonra yeniden alınabilir ama deneme ve yaş sınırı dolmuşsa alınmaz.
+func ClaimMessage(ctx context.Context, db DB, id string, now time.Time, maxAttempts int, maxAge time.Duration) (attempts int, first time.Time, ok bool, err error) {
 	err = db.QueryRow(ctx, `UPDATE messages m SET state = 'sending', attempts = m.attempts + 1,
 			first_attempt_at = coalesce(m.first_attempt_at, $2), next_attempt_at = NULL, updated_at = now()
 		FROM users u, campaigns c
 		WHERE m.id = $1 AND m.state IN ('queued', 'sending')
+			AND m.attempts < $3
+			AND (m.first_attempt_at IS NULL OR $2::timestamptz - m.first_attempt_at < $4::interval)
 			AND u.id = m.user_id AND c.id = m.campaign_id AND c.state <> 'cancelled'
 			AND CASE m.channel WHEN 'sms' THEN u.consent_sms ELSE u.consent_email END
-		RETURNING m.attempts, m.first_attempt_at`, id, now).Scan(&attempts, &first)
+		RETURNING m.attempts, m.first_attempt_at`, id, now, maxAttempts, maxAge).Scan(&attempts, &first)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, time.Time{}, false, nil
 	}
 	return attempts, first, err == nil, err
+}
+
+// Gönderimde kalmış mesajın son denemesi bilinmez, bu yüzden hata metni bunu söyler.
+func ExpireMessage(ctx context.Context, db DB, id string, now time.Time, maxAttempts int, maxAge time.Duration) (bool, error) {
+	return applied(db.Exec(ctx, `UPDATE messages SET state = 'dead',
+			last_error_class = coalesce(last_error_class, 'timeout'),
+			last_error = CASE WHEN state = 'sending' THEN 'retry budget exhausted; the outcome of the last attempt is unknown'
+				ELSE coalesce(last_error, 'retry budget exhausted') END,
+			next_attempt_at = NULL, updated_at = now()
+		WHERE id = $1 AND state IN ('queued', 'sending')
+			AND (attempts >= $3 OR $2::timestamptz - first_attempt_at >= $4::interval)`, id, now, maxAttempts, maxAge))
 }
 
 func MarkSent(ctx context.Context, db DB, id, providerID string, at time.Time) (bool, error) {

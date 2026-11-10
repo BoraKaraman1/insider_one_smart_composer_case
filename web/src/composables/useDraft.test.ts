@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { effectScope } from 'vue'
+import { effectScope, nextTick, ref } from 'vue'
+import type { Api } from '../api/client'
 import { ApiError } from '../api/client'
+import { useCampaign } from './useCampaign'
 import { useDraft } from './useDraft'
 
 const segment = { version: 1, match: 'all', conditions: [{ kind: 'enum_attribute', field: 'city', op: 'eq', value: 'istanbul' }] }
@@ -52,6 +54,92 @@ describe('useDraft', () => {
     d.start(view('r2', 5, { sms: 'server copy', subject: 'server', body: 'server' }))
     expect(d.draft.value!.sms).toBe('my edit {{campaign_url}}')
     expect(d.body().base_revision_id).toBe('r1')
+    expect(d.conflict.value).toBe(true)
+    expect(d.approval()).toBeNull()
+  })
+
+  it('keeps approval blocked when an edited draft is typed back to its old base', () => {
+    const { d } = withDraft()
+    d.start(view('r1', 3))
+    d.draft.value!.sms = 'my edit {{campaign_url}}'
+    d.observe(view('r2', 5, { sms: 'server copy', subject: 'server', body: 'server' }))
+    d.draft.value!.sms = 'Merhaba {{campaign_url}}'
+    expect(d.dirty.value).toBe(false)
+    d.observe(view('r2', 5, { sms: 'server copy', subject: 'server', body: 'server' }))
+    expect(d.draft.value!.sms).toBe('Merhaba {{campaign_url}}')
+    expect(d.approval()).toBeNull()
+    d.useLatest(d.latest.value!)
+    expect(d.draft.value!.sms).toBe('server copy')
+    expect(d.approval()).toBe('r2')
+  })
+
+  it('after a 409 on approve, shows the newer revision before it can be approved', async () => {
+    const theirs = { sms: 'other session {{campaign_url}}', subject: 'theirs', body: 'theirs' }
+    let server = view('r1', 3)
+    const approve = vi.fn(async (_id: string, revisionId: string, version: number) => {
+      if (revisionId !== server.revision.id || version !== server.campaign.version) {
+        throw new ApiError(409, [{ path: '', code: 'version_conflict', message: 'the campaign changed' }])
+      }
+      return { ...server, campaign: { ...server.campaign, state: 'approved' } }
+    })
+    const api = { getCampaign: vi.fn(async () => server), approve } as unknown as Api
+    const scope = effectScope()
+    const { c, d } = scope.run(() => {
+      const c = useCampaign(ref('c1'), api)
+      const d = useDraft()
+      d.track(c.view)
+      return { c, d }
+    })!
+    // Görünümdeki onay düğmesinin yaptığı çağrı.
+    const clickApprove = async () => {
+      const shown = d.approval()
+      if (!shown) return null
+      return c.act('Onaylama', () => api.approve('c1', shown, c.view.value!.campaign.version))
+    }
+
+    await c.reload()
+    await nextTick()
+    expect(d.draft.value!.sms).toBe('Merhaba {{campaign_url}}')
+
+    server = view('r2', 4, theirs)
+    expect(await clickApprove()).toBeNull()
+    expect(approve).toHaveBeenLastCalledWith('c1', 'r1', 3)
+    await nextTick()
+    expect(d.draft.value).toEqual(theirs)
+    expect(d.dirty.value).toBe(false)
+    expect(d.conflict.value).toBe(false)
+
+    const approved = await clickApprove()
+    expect(approve).toHaveBeenLastCalledWith('c1', 'r2', 4)
+    expect(approved?.campaign.state).toBe('approved')
+    expect(d.draft.value).toEqual(theirs)
+    scope.stop()
+  })
+
+  it('after a 409 on approve, an edited draft is kept and cannot approve the unseen revision', async () => {
+    let server = view('r1', 3)
+    const approve = vi.fn(async () => {
+      throw new ApiError(409, [])
+    })
+    const api = { getCampaign: vi.fn(async () => server), approve } as unknown as Api
+    const scope = effectScope()
+    const { c, d } = scope.run(() => {
+      const c = useCampaign(ref('c1'), api)
+      const d = useDraft()
+      d.track(c.view)
+      return { c, d }
+    })!
+    await c.reload()
+    await nextTick()
+    d.draft.value!.sms = 'my edit {{campaign_url}}'
+    server = view('r2', 4, { sms: 'theirs', subject: 'theirs', body: 'theirs' })
+    await c.reload()
+    await nextTick()
+    expect(d.draft.value!.sms).toBe('my edit {{campaign_url}}')
+    expect(d.conflict.value).toBe(true)
+    expect(d.approval()).toBeNull()
+    expect(approve).not.toHaveBeenCalled()
+    scope.stop()
   })
 
   it('keeps the draft on a 409 and reports the conflict', async () => {

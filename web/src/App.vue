@@ -6,7 +6,7 @@ import { clearToken, token } from './session'
 <template>
   <header>
     <RouterLink to="/" class="brand">Smart Campaign Composer</RouterLink>
-    <button v-if="token" type="button" class="link" @click="clearToken">Sign out</button>
+    <button v-if="token" type="button" class="link" @click="clearToken">Çıkış yap</button>
   </header>
   <main>
     <TokenGate v-if="!token" />

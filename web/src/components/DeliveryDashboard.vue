@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import type { CampaignView } from '../api/types'
 import { useDeliveryPolling } from '../composables/useDeliveryPolling'
+import { channelName, messageState } from '../labels'
 import { api, clearToken } from '../session'
 import AttentionTable from './AttentionTable.vue'
 
@@ -36,29 +37,31 @@ function total(c: Record<string, number>) {
 
 <template>
   <section>
-    <h2>Delivery</h2>
+    <h2>Teslimat</h2>
     <p class="muted">
-      <span v-if="ago !== null">Last updated {{ ago }} s ago.</span>
-      <span v-if="p.stale.value" class="error"> Stale: the last update failed, retrying.</span>
-      <span v-if="!p.polling.value"> Finished, no longer polling.</span>
+      <span v-if="ago !== null">Son güncelleme {{ ago }} sn önce.</span>
+      <span v-if="p.stale.value" class="error"> Eski veri: son güncelleme başarısız, yeniden deneniyor.</span>
+      <span v-if="!p.polling.value"> Bitti, artık sorgulanmıyor.</span>
     </p>
     <div v-for="(counts, channel) in p.stats.value?.channels ?? {}" :key="channel">
-      <strong>{{ channel }}</strong> <span class="muted">{{ total(counts) }} messages</span>
+      <strong>{{ channelName(channel) }}</strong> <span class="muted">{{ total(counts) }} mesaj</span>
       <div class="bar">
         <span
           v-for="s in states"
           :key="s"
-          :title="`${s}: ${counts[s] ?? 0}`"
+          :title="`${messageState(s)}: ${counts[s] ?? 0}`"
           :style="{ width: total(counts) ? ((counts[s] ?? 0) * 100) / total(counts) + '%' : '0', background: colors[s] }"
         />
       </div>
-      <table>
-        <tbody>
-          <tr>
-            <td v-for="s in states" :key="s">{{ s }}: {{ counts[s] ?? 0 }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table>
+          <tbody>
+            <tr>
+              <td v-for="s in states" :key="s">{{ messageState(s) }}: {{ counts[s] ?? 0 }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <AttentionTable :items="p.attention.value" />
   </section>

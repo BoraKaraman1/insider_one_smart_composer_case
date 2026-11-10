@@ -99,6 +99,29 @@ describe('useGeneration', () => {
     s.scope.stop()
   })
 
+  it('replays a finished failed generation with its errors and opens the stream once', async () => {
+    const errors = [{ path: '/sms/body', code: 'url_not_allowed', message: 'link "https://" is not allowed' }]
+    const s = setup(
+      [
+        () =>
+          sse(
+            frame(5, 'started', { version: 2 }),
+            frame(6, 'attempt_failed', { stage: 'content', attempt: 3, errors }),
+            frame(7, 'failed', { reason: 'invalid_output', stage: 'content', errors }),
+          ),
+      ],
+      [() => view('generation_failed')],
+    )
+    await s.g.follow('c1', '/api/campaigns/c1/events?after=4')
+    expect(s.g.state.value.phase).toBe('failed')
+    expect(s.g.state.value.errors).toEqual(errors)
+    expect(s.g.view.value?.campaign.state).toBe('generation_failed')
+    expect(s.g.endedEarly.value).toBe(false)
+    expect(s.fetchMock).toHaveBeenCalledTimes(1)
+    expect(s.fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET')
+    s.scope.stop()
+  })
+
   it('stops on 401 and hands back to the token gate', async () => {
     const s = setup([() => new Response('{"errors":[{"path":"","code":"unauthorized","message":"no"}]}', { status: 401 })], [])
     await s.g.follow('c1', '/e')
