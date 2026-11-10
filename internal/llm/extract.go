@@ -6,18 +6,12 @@ import (
 	"unicode/utf8"
 )
 
-// Fields are the three copy fields of a content answer.
 type Fields struct {
 	SMSBody      string
 	EmailSubject string
 	EmailBody    string
 }
 
-// ExtractFields reads sms.body, email.subject and email.body from a content
-// answer that may still be streaming. An unfinished string gives the part
-// received so far; an escape that is cut off is left out until it is whole,
-// so a value read from a prefix is always a prefix of the final value. Text
-// that is not a JSON object gives empty fields. It never panics.
 func ExtractFields(text string) Fields {
 	p := &partial{s: text}
 	var f Fields
@@ -49,8 +43,6 @@ func ExtractFields(text string) Fields {
 	return f
 }
 
-// partial is a reader over JSON that may end anywhere. Every method stops at
-// the end of the input or at the first byte it does not expect, and sets done.
 type partial struct {
 	s    string
 	i    int
@@ -65,9 +57,6 @@ func (p *partial) ws() {
 
 func (p *partial) peek(c byte) bool { return !p.done && p.i < len(p.s) && p.s[p.i] == c }
 
-// object reads {"key": value, ...}. value is called with the reader just
-// after the colon; it reads the value and returns true, or returns false to
-// have the value skipped.
 func (p *partial) object(value func(key string) bool) {
 	p.ws()
 	if !p.peek('{') {
@@ -115,7 +104,6 @@ func (p *partial) object(value func(key string) bool) {
 	}
 }
 
-// skip reads past one value of any type.
 func (p *partial) skip() {
 	p.ws()
 	if p.done || p.i >= len(p.s) {
@@ -149,7 +137,7 @@ func (p *partial) skip() {
 				p.done = true
 			}
 		}
-	default: // number, true, false, null
+	default:
 		for p.i < len(p.s) && strings.IndexByte(",}] \t\r\n", p.s[p.i]) < 0 {
 			p.i++
 		}
@@ -159,11 +147,8 @@ func (p *partial) skip() {
 	}
 }
 
-// str reads a string starting at its opening quote. It returns the decoded
-// text and whether the closing quote was seen. On a cut-off escape or rune it
-// stops before it and marks the reader done.
 func (p *partial) str() (string, bool) {
-	p.i++ // opening quote
+	p.i++
 	var b strings.Builder
 	for p.i < len(p.s) {
 		c := p.s[p.i]
@@ -188,7 +173,7 @@ func (p *partial) str() (string, bool) {
 				return b.String(), false
 			}
 			r, n := utf8.DecodeRuneInString(p.s[p.i:])
-			b.WriteRune(r) // invalid bytes become U+FFFD, as encoding/json does
+			b.WriteRune(r) // bozuk bayt yer tutucu karaktere döner
 			p.i += n
 		}
 	}
@@ -196,8 +181,6 @@ func (p *partial) str() (string, bool) {
 	return b.String(), false
 }
 
-// escape decodes the escape at p.i. It returns 0 bytes when the escape is
-// incomplete or invalid.
 func (p *partial) escape() (rune, int) {
 	rest := p.s[p.i:]
 	if len(rest) < 2 {
@@ -224,7 +207,6 @@ func (p *partial) escape() (rune, int) {
 		if !utf16.IsSurrogate(r) {
 			return r, 6
 		}
-		// A high surrogate needs its pair; wait until the second escape is whole.
 		if r < 0xdc00 && len(rest) >= 12 && rest[6] == '\\' && rest[7] == 'u' {
 			if lo, ok := hex4(rest[8:]); ok {
 				if dec := utf16.DecodeRune(r, lo); dec != utf8.RuneError {
@@ -235,9 +217,9 @@ func (p *partial) escape() (rune, int) {
 			return 0, 0
 		}
 		if r < 0xdc00 && len(rest) < 12 && strings.HasPrefix(`\u`, rest[6:min(len(rest), 8)]) {
-			return 0, 0 // the pair may still arrive
+			return 0, 0 // çiftin kalanı henüz gelebilir
 		}
-		return utf8.RuneError, 6 // a lone surrogate, as encoding/json decodes it
+		return utf8.RuneError, 6
 	}
 	return 0, 0
 }

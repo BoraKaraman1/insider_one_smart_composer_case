@@ -8,22 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// lockID serializes concurrent loaders (two setup runs at once).
 const lockID int64 = 0x5eed
 
-// Load writes ds in one transaction and reports whether it wrote anything.
-//
-// Without reset, existing data is kept: if any user exists, nothing is
-// written, so running setup twice is safe. With reset, users, events,
-// seed_meta and every campaign (with its revisions, audit events, LLM calls
-// and messages) are removed first. That is a dev reset that re-anchors the
-// data at ds.AsOf.
 func Load(ctx context.Context, pool *pgxpool.Pool, ds Dataset, reset bool) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(ctx) // no-op after Commit
+	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockID); err != nil {
 		return false, err
@@ -33,6 +25,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, ds Dataset, reset bool) (bool
 			return false, err
 		}
 	} else {
+		// Kayıt varken sıfırlama yoksa ikinci yükleme hiçbir şey yazmaz.
 		var exists bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users)").Scan(&exists); err != nil {
 			return false, err
@@ -62,9 +55,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, ds Dataset, reset bool) (bool
 		ds.AsOf, ds.Seed, len(ds.Users)); err != nil {
 		return false, err
 	}
-	// Collect planner statistics now. Without them, queries right after a
-	// bulk load (before autovacuum gets to it) pick seq-scan plans that are
-	// about 10x slower.
+	// Toplu yüklemeden hemen sonra planlayıcı istatistik toplar.
 	if _, err := tx.Exec(ctx, "ANALYZE users, user_events"); err != nil {
 		return false, err
 	}

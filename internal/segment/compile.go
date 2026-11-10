@@ -11,12 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The compiler turns a validated Rule into SQL over `users u`. Every piece of
-// SQL text comes from this file; columns, operators and event types are
-// looked up in the maps below, and every value, event type and time cutoff
-// is a bound parameter. So the SQL text depends only on the rule's shape,
-// never on its values (rule 2). Semantics: docs/segment-rules.md.
-
 var enumColumns = map[string]string{
 	"city":         "u.city",
 	"language":     "u.language",
@@ -30,8 +24,6 @@ var enumOps = map[string]string{
 	"not_in": "%s <> ALL(%s::text[])",
 }
 
-// consentColumns is the only way to name a channel. AudienceQuery always
-// ANDs the channel's column, and nothing else returns recipients.
 var consentColumns = map[string]string{
 	"sms":   "u.consent_sms",
 	"email": "u.consent_email",
@@ -39,7 +31,6 @@ var consentColumns = map[string]string{
 
 const day = 24 * time.Hour
 
-// fragment is compiled SQL plus its arguments, in $n order.
 type fragment struct {
 	sql  string
 	args []any
@@ -50,10 +41,6 @@ func (f *fragment) arg(v any) string {
 	return "$" + strconv.Itoa(len(f.args))
 }
 
-// compile builds the WHERE condition for a rule. It is unexported on
-// purpose: callers get recipients only through AudienceQuery, which adds the
-// consent filter, or counts through CountAudience. It checks structure
-// against the catalog but not values, which are data and always bound.
 func compile(r Rule, asOf time.Time) (fragment, error) {
 	asOf = asOf.UTC().Truncate(time.Microsecond)
 	var joiner string
@@ -101,12 +88,11 @@ func (f *fragment) condition(c Condition, asOf time.Time) (string, error) {
 		if c.Field != "days_since_signup" {
 			return "", fmt.Errorf("unknown number field %q", c.Field)
 		}
-		// days = floor((asOf - signup_at) / 24h), as timestamp ranges with
-		// d(n) = asOf - n*24h, so no float math happens in SQL.
 		d := func(n int) time.Time { return asOf.Add(-time.Duration(n) * day) }
 		n := c.Number
 		switch c.Op {
 		case "eq":
+			// Gün sayısı kayan nokta yerine zaman aralığıyla sayılır.
 			return fmt.Sprintf("(u.signup_at > %s AND u.signup_at <= %s)", f.arg(d(n+1)), f.arg(d(n))), nil
 		case "neq":
 			return fmt.Sprintf("NOT (u.signup_at > %s AND u.signup_at <= %s)", f.arg(d(n+1)), f.arg(d(n))), nil
@@ -140,15 +126,11 @@ func (f *fragment) condition(c Condition, asOf time.Time) (string, error) {
 	}
 }
 
-// Query is a SQL statement with its arguments.
 type Query struct {
 	SQL  string
 	Args []any
 }
 
-// AudienceQuery selects the ids of a rule's recipients on one channel: users
-// who match the rule and consented to that channel. The consent filter is
-// always part of the query; a rule cannot express or remove it.
 func AudienceQuery(r Rule, channel string, asOf time.Time) (Query, error) {
 	consent, ok := consentColumns[channel]
 	if !ok {
@@ -158,24 +140,20 @@ func AudienceQuery(r Rule, channel string, asOf time.Time) (Query, error) {
 	if err != nil {
 		return Query{}, err
 	}
+	// Rıza süzgeci her zaman eklenir ve kural onu yazamaz.
 	return Query{SQL: "SELECT u.id FROM users u WHERE " + f.sql + " AND " + consent, Args: f.args}, nil
 }
 
-// Counts is the audience size of a rule. Total ignores consent; the eligible
-// counts are what would actually be sent per channel.
 type Counts struct {
 	Total         int `json:"total"`
 	SMSEligible   int `json:"sms_eligible"`
 	EmailEligible int `json:"email_eligible"`
 }
 
-// Querier runs one query. *pgxpool.Pool, *pgx.Conn and pgx.Tx satisfy it.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// CountAudience counts the users a rule matches, in total and per channel
-// with consent applied.
 func CountAudience(ctx context.Context, q Querier, r Rule, asOf time.Time) (Counts, error) {
 	f, err := compile(r, asOf)
 	if err != nil {

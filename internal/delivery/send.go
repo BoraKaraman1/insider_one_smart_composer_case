@@ -23,34 +23,25 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// Send limits (rule 6).
 const (
-	ProviderTimeout = 5 * time.Second // per attempt
-	MaxAttempts     = 6               // then the message is dead
+	ProviderTimeout = 5 * time.Second
+	MaxAttempts     = 6
 	MaxAge          = 15 * time.Minute
 )
 
-// SendWorker sends one message per job, on the sms and email queues.
 type SendWorker struct {
 	river.WorkerDefaults[jobs.SendArgs]
 	DB              DB
 	ProviderURL     string
-	Limiters        map[string]Limiter // one per channel; every attempt takes a token
+	Limiters        map[string]Limiter
 	ProviderTimeout time.Duration
 	Now             func() time.Time
-	// Backoff gives the delay before retry number n (0 is the first retry),
-	// when the provider sent no Retry-After.
-	Backoff func(retry int) time.Duration
-	Client  *http.Client
-	Log     *slog.Logger
-	// Metrics counts provider calls and message outcomes. Nil counts
-	// nothing.
-	Metrics Metrics
+	Backoff         func(retry int) time.Duration
+	Client          *http.Client
+	Log             *slog.Logger
+	Metrics         Metrics
 }
 
-// Metrics is what the send worker reports. *metrics.Registry satisfies it.
-// Message and Retry are called only when the guarded update applied, so a
-// duplicate or late run never counts a message twice.
 type Metrics interface {
 	ProviderRequest(channel, class string, d time.Duration)
 	LimiterWait(channel string, d time.Duration)
@@ -74,7 +65,6 @@ func (w *SendWorker) metrics() Metrics {
 	return noMetrics{}
 }
 
-// RandomBackoff is retry.Backoff over a shared, locked random source.
 func RandomBackoff(rng *rand.Rand) func(int) time.Duration {
 	var mu sync.Mutex
 	return func(n int) time.Duration {
@@ -84,7 +74,6 @@ func RandomBackoff(rng *rand.Rand) func(int) time.Duration {
 	}
 }
 
-// Timeout bounds one job run.
 func (w *SendWorker) Timeout(*river.Job[jobs.SendArgs]) time.Duration { return jobs.SendTimeout }
 
 func (w *SendWorker) log() *slog.Logger {
@@ -94,12 +83,6 @@ func (w *SendWorker) log() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// Work sends a message at least once. Every state update is guarded by its
-// predecessors. Retries carry the message id as the idempotency key, so the
-// provider sends once however often this runs. A retryable failure snoozes
-// the job; a permanent one fails the message and cancels the job; a
-// database error is returned, so River runs the job again and the message,
-// still in sending, is reclaimed.
 func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) error {
 	id := job.Args.MessageID
 	log := w.log().With("message_id", id)
@@ -125,8 +108,6 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 		return err
 	}
 	met.LimiterWait(m.Channel, time.Since(waitStart))
-	// The claim is the dispatch cutoff. It checks consent and cancellation
-	// again, because either may have changed while we waited for the token.
 	now := w.Now()
 	attempts, first, ok, err := store.ClaimMessage(ctx, w.DB, id, now)
 	if err != nil {
@@ -139,12 +120,10 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 		if done, err := w.gate(ctx, log, m); done {
 			return err
 		}
-		// Consent came back between the claim and this read: run again.
 		return fmt.Errorf("send: claim of %s did not apply", id)
 	}
 	payload, err := w.payload(m)
 	if err != nil {
-		// A template the validator let through but the renderer rejects.
 		ok, uerr := store.MarkFinal(ctx, w.DB, id, "failed", string(retry.ClientError), "render: "+err.Error())
 		if uerr != nil {
 			return uerr
@@ -208,14 +187,10 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	return river.JobSnooze(delay)
 }
 
-// gate decides whether a message may still be sent. It reports done for a
-// terminal message, which only gets the completion check again (an earlier
-// run may have failed it after the terminal update), and for a cancelled
-// campaign or a lost consent, which skip the message.
 func (w *SendWorker) gate(ctx context.Context, log *slog.Logger, m store.Send) (bool, error) {
 	switch {
 	case m.State != "queued" && m.State != "sending":
-		return true, w.finish(ctx, log, m, nil) // terminal: never sent again
+		return true, w.finish(ctx, log, m, nil)
 	case campaign.State(m.CampaignState) == campaign.Cancelled:
 		return true, w.skip(ctx, log, m, "cancelled")
 	case !m.Consent:
@@ -236,7 +211,6 @@ func (w *SendWorker) skip(ctx context.Context, log *slog.Logger, m store.Send, c
 	return w.finish(ctx, log, m, nil)
 }
 
-// finish runs the completion check after a terminal update and returns ret.
 func (w *SendWorker) finish(ctx context.Context, log *slog.Logger, m store.Send, ret error) error {
 	if err := campaign.CompleteIfDone(ctx, w.DB, m.CampaignID); err != nil {
 		log.Error("completion check failed", "campaign_id", m.CampaignID, "error", err)
@@ -252,8 +226,6 @@ type providerMessage struct {
 	Body    string `json:"body"`
 }
 
-// payload renders the message. The renderer gets a RenderContext, never the
-// users row; contact data goes only to "to".
 func (w *SendWorker) payload(m store.Send) ([]byte, error) {
 	rc := content.RenderContext{FirstName: m.FirstName, LastName: m.LastName, City: m.City, CampaignURL: m.CampaignURL}
 	pm := providerMessage{Channel: m.Channel}
@@ -273,8 +245,6 @@ func (w *SendWorker) payload(m store.Send) ([]byte, error) {
 	return json.Marshal(pm)
 }
 
-// post makes one provider call with the message id as the idempotency key.
-// lastErr describes a failure without any message content.
 func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (providerID string, res retry.Result, lastErr string) {
 	timeout := w.ProviderTimeout
 	if timeout <= 0 {
@@ -288,11 +258,7 @@ func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (provi
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", id)
-	// net/http treats a request with an Idempotency-Key as replayable and
-	// silently resends it on a dropped connection. That call would take no
-	// limiter token and count no attempt. Without GetBody the transport
-	// cannot replay it, so every retry goes through Work.
-	req.GetBody = nil
+	req.GetBody = nil // gövde yeniden okunamazsa kopunca istek sessizce tekrarlanmaz
 	client := w.Client
 	if client == nil {
 		client = http.DefaultClient
@@ -303,9 +269,7 @@ func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (provi
 		return "", res, fmt.Sprintf("provider call failed: %s", res.Class)
 	}
 	defer resp.Body.Close()
-	// The status decides first: a broken body must not turn a permanent 4xx
-	// into a retryable read error. Only a success needs its body.
-	res = retry.Classify(resp, nil, time.Now())
+	res = retry.Classify(resp, nil, time.Now()) // gövde bozuk olsa da kalıcı hata yeniden denenmez
 	if res.Class != retry.Success {
 		return "", res, fmt.Sprintf("provider answered %d", resp.StatusCode)
 	}
@@ -318,7 +282,6 @@ func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (provi
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil || out.ID == "" {
-		// Sent, but we cannot tell the id: retry, the replay will carry it.
 		return "", retry.Result{Class: retry.ServerError}, "provider answered without an id"
 	}
 	return out.ID, res, ""

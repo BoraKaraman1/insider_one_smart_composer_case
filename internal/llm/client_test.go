@@ -20,10 +20,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// These tests run the client against internal/mockllm, the same fake the
-// generation tests use, so there is one fake of the Messages API to keep
-// right. The external test package keeps mockllm free to never import llm.
-
 func schemas(t *testing.T) *schema.Set {
 	t.Helper()
 	set, err := schema.Load()
@@ -63,7 +59,6 @@ func decode(t *testing.T, r mockllm.Request) map[string]any {
 	return body
 }
 
-// systemText reads the system prompt, sent as a string or as text blocks.
 func systemText(body map[string]any) string {
 	switch s := body["system"].(type) {
 	case string:
@@ -91,7 +86,6 @@ func messages(body map[string]any) []map[string]any {
 	return out
 }
 
-// blocks reads a message's content as blocks; a plain string is one text block.
 func blocks(m map[string]any) []map[string]any {
 	switch c := m["content"].(type) {
 	case string:
@@ -118,8 +112,6 @@ func messageText(m map[string]any) string {
 	return sb.String()
 }
 
-// normalize round-trips a value through encoding/json, so two decoded
-// schemas compare equal whatever number types they used.
 func normalize(t *testing.T, v any) any {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -133,10 +125,6 @@ func normalize(t *testing.T, v any) any {
 	return out
 }
 
-// TestRequestShape pins what goes over the wire for each stage: model,
-// adaptive thinking, explicit effort, JSON outputs with the API-derived
-// schema, streaming, the refusal fallback, and nothing the API rejects. The
-// mock also answers 400 to anything the real API rejects.
 func TestRequestShape(t *testing.T) {
 	set := schemas(t)
 	cases := []struct {
@@ -195,9 +183,6 @@ func TestRequestShape(t *testing.T) {
 	}
 }
 
-// The SDK reads credentials and the base URL from the environment by
-// default. The client must use only its Config, so a key in the environment
-// can never reach the mock, and mock mode can never reach the real API.
 func TestClientIgnoresSDKEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "env-value-must-not-be-sent")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "env-token-must-not-be-sent")
@@ -212,8 +197,6 @@ func TestClientIgnoresSDKEnvironment(t *testing.T) {
 	}
 }
 
-// Text deltas reach onText as they arrive and rebuild the text. Stop reason,
-// usage and latency are captured.
 func TestStreamingResponse(t *testing.T) {
 	m, srv := mock(t)
 	answer := `{"sms":{"body":"` + strings.Repeat("Merhaba {{first_name}} ", 8) + `"},"email":{"subject":"Sepet","body":"Selam"}}`
@@ -231,8 +214,6 @@ func TestStreamingResponse(t *testing.T) {
 	}
 }
 
-// A refusal or max_tokens is a complete HTTP exchange, not a transport
-// error. The caller decides: a refusal is never retried, max_tokens is.
 func TestStopReasonsAreNotErrors(t *testing.T) {
 	m, srv := mock(t)
 	m.Script(mockllm.Content, mockllm.Refusal(), mockllm.MaxTokens(`{"sms":{"bo`))
@@ -245,8 +226,6 @@ func TestStopReasonsAreNotErrors(t *testing.T) {
 	}
 }
 
-// SDK retries are off: every retry goes through internal/retry. A failing
-// call is classified once, with the server's Retry-After.
 func TestErrorsAreClassifiedAndNotRetried(t *testing.T) {
 	cases := []struct {
 		reply  mockllm.Reply
@@ -288,10 +267,6 @@ func TestConnectionRefused(t *testing.T) {
 	}
 }
 
-// The watchdog cancels a stream with no event for StallTimeout, including
-// the wait for the response headers, and any stream older than TotalTimeout.
-// The last two cases need a server the mock does not model, so they use a
-// plain handler.
 func TestWatchdog(t *testing.T) {
 	release := make(chan struct{})
 	m, stalling := mock(t)
@@ -303,7 +278,6 @@ func TestWatchdog(t *testing.T) {
 		}
 	}))
 	t.Cleanup(silent.Close)
-	// Pings keep the stall timer from firing; only the total timeout can.
 	pinging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for {
@@ -321,8 +295,6 @@ func TestWatchdog(t *testing.T) {
 		}
 	}))
 	t.Cleanup(pinging.Close)
-	// Runs first (cleanups are LIFO): the silent handler never reads the
-	// body, so it cannot see the client go away and only release ends it.
 	t.Cleanup(func() { close(release) })
 
 	cases := []struct {
@@ -352,10 +324,6 @@ func TestWatchdog(t *testing.T) {
 	}
 }
 
-// The repair turn is append-only (preserved thinking on Opus 5.5 forbids
-// editing earlier turns): earlier messages are resent unchanged, the
-// assistant turn goes back with its thinking block, and the next user turn
-// carries the validation errors as JSON.
 func TestRepairTurn(t *testing.T) {
 	m, srv := mock(t)
 	answers := []string{`{"sms":{"body":"Hi {{password}}"}}`, `{"sms":{"body":"Hi {{first_name}}"}}`, `{}`}
@@ -397,7 +365,6 @@ func TestRepairTurn(t *testing.T) {
 	checkAssistant(t, m3[3], answers[1])
 	checkRepairErrors(t, m2[2], issues[0])
 	checkRepairErrors(t, m3[4], issues[1])
-	// The cached prefix stays the same across attempts.
 	for _, k := range []string{"system", "output_config", "model", "thinking"} {
 		if !reflect.DeepEqual(b1[k], b2[k]) || !reflect.DeepEqual(b2[k], b3[k]) {
 			t.Errorf("%s changed between attempts", k)
@@ -405,8 +372,6 @@ func TestRepairTurn(t *testing.T) {
 	}
 }
 
-// checkAssistant requires the assistant turn to carry a thinking block with
-// its signature and exactly the text that was received.
 func checkAssistant(t *testing.T, m map[string]any, text string) {
 	t.Helper()
 	if m["role"] != "assistant" {
@@ -431,8 +396,6 @@ func checkAssistant(t *testing.T, m map[string]any, text string) {
 	}
 }
 
-// checkRepairErrors finds the JSON array in the user turn and requires it to
-// be exactly the validation issues.
 func checkRepairErrors(t *testing.T, m map[string]any, want []validation.Issue) {
 	t.Helper()
 	if m["role"] != "user" {
@@ -452,8 +415,6 @@ func checkRepairErrors(t *testing.T, m map[string]any, want []validation.Issue) 
 	}
 }
 
-// ConfigFromEnv fails closed. Mock mode never reads the API key, so a
-// misconfigured worker cannot send it to the mock.
 func TestConfigFromEnv(t *testing.T) {
 	run := func(env map[string]string) (llm.Config, []string, error) {
 		var asked []string

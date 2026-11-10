@@ -5,9 +5,6 @@ import (
 	"strings"
 )
 
-// Describe writes a validated rule as one English sentence. Our code writes
-// it from the rule, so the reviewer reads what will run, not the model's
-// claim about it. The text depends only on the rule.
 func Describe(r Rule) string {
 	parts := make([]string, len(r.Conditions))
 	for i, c := range r.Conditions {

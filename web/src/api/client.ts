@@ -1,7 +1,3 @@
-// The fetch wrapper. The token goes only in the Authorization header, never
-// in a URL. Every non-2xx answer becomes an ApiError with the server's
-// {path, code, message} issues.
-
 import type { Issue } from './issues'
 import type { AttentionItem, CampaignView, GenerateResponse, RevisionRequest, Stats } from './types'
 
@@ -17,15 +13,12 @@ export class ApiError extends Error {
   }
 }
 
-// errorFrom reads the {"errors": [...]} body of a failed answer. A body of
-// another shape still yields one issue, so the failure is never silent.
 export async function errorFrom(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => '')
   try {
     const body = JSON.parse(text)
     if (Array.isArray(body?.errors)) return new ApiError(res.status, body.errors)
   } catch {
-    // not JSON
   }
   return new ApiError(res.status, [{ path: '', code: `http_${res.status}`, message: text.slice(0, 200) || res.statusText }])
 }

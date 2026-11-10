@@ -15,17 +15,12 @@ const (
 	codeUnknownFilter = "unknown_filter"
 )
 
-// deliveryRoutes registers the stage B routes: approve, and the read APIs
-// of the dashboard.
 func (s *Server) deliveryRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/campaigns/{id}/approve", s.withCampaignID(s.approve))
 	api.HandleFunc("GET /api/campaigns/{id}/stats", s.withCampaignID(s.deliveryStats))
 	api.HandleFunc("GET /api/campaigns/{id}/messages", s.withCampaignID(s.messages))
 }
 
-// approve approves the latest revision and enqueues the fan-out job in one
-// transaction. A stale revision or version, or a revision without a
-// consenting recipient, gets 409.
 func (s *Server) approve(w http.ResponseWriter, r *http.Request, id string) {
 	doc, ok := decodeBody(w, r)
 	if !ok {
@@ -67,7 +62,6 @@ type statsResponse struct {
 	Channels map[string]map[string]int `json:"channels"`
 }
 
-// deliveryStats counts the campaign's messages per channel and state.
 func (s *Server) deliveryStats(w http.ResponseWriter, r *http.Request, id string) {
 	ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
 	defer cancel()
@@ -87,9 +81,6 @@ type messagesResponse struct {
 	Messages []store.AttentionItem `json:"messages"`
 }
 
-// messages lists messages that need attention (filter=attention, the only
-// filter): stuck in sending, overdue, retried many times, failed or dead.
-// Contact data is never part of the answer.
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, id string) {
 	if f := r.URL.Query().Get("filter"); f != "attention" {
 		writeJSON(w, http.StatusUnprocessableEntity, issues([]validation.Issue{{Path: "/filter", Code: codeUnknownFilter,

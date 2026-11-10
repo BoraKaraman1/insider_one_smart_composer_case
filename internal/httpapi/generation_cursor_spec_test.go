@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// Plan 3, 1.1: the campaign view carries
-// "generation": {"events_url": "/api/campaigns/{id}/events?after=N"}, N being
-// the latest started event id minus 1, or null before the first generation.
-// The UI never builds an events URL itself.
-
 func viewEventsURL(t *testing.T, view map[string]any) (string, bool) {
 	t.Helper()
 	g, present := view["generation"]
@@ -27,8 +22,6 @@ func viewEventsURL(t *testing.T, view map[string]any) (string, bool) {
 	return u, true
 }
 
-// A campaign that never generated has generation: null, also through the
-// 201 of create.
 func TestViewGenerationNullBeforeFirstGeneration(t *testing.T) {
 	h, p := campaignAPI(t)
 	rec := do(h, "POST", "/api/campaigns", createBody("brief", okURL), bearer)
@@ -49,8 +42,6 @@ func TestViewGenerationNullBeforeFirstGeneration(t *testing.T) {
 	}
 }
 
-// After a generate, and again after a second one, the view's URL equals
-// the one in the 202.
 func TestViewGenerationMatchesGenerate(t *testing.T) {
 	h, p := generateAPI(t)
 	f := insertCampaign(t, p, "in_review", 2)
@@ -60,7 +51,6 @@ func TestViewGenerationMatchesGenerate(t *testing.T) {
 		t.Errorf("after the first generate: view %q, 202 %q (%v)", got, first, body["generation"])
 	}
 
-	// The first generation ends; the campaign goes back to review.
 	if _, err := p.Exec(t.Context(), `UPDATE campaigns SET state = 'in_review', version = 4 WHERE id = $1`, f.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +68,6 @@ func TestViewGenerationMatchesGenerate(t *testing.T) {
 	}
 }
 
-// Reading the view's URL during a second generation never yields the
-// first generation's terminal event: it starts at the new started event.
 func TestViewGenerationSkipsOlderGeneration(t *testing.T) {
 	srv, _, _ := liveStack(t)
 	code, created := apiCall(t, srv, "POST", "/api/campaigns", createBody(specBrief, okURL))

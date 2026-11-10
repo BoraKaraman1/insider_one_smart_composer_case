@@ -8,7 +8,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// The tables rivermigrate creates. Jobs cannot be inserted without them.
 var riverTables = []string{"river_job", "river_leader", "river_queue", "river_migration"}
 
 func missingRiverTables(t *testing.T, db *sql.DB) []string {
@@ -26,8 +25,6 @@ func missingRiverTables(t *testing.T, db *sql.DB) []string {
 	return missing
 }
 
-// TestMigrateRunsRiver checks that Migrate creates the River tables after
-// the goose migrations, and that a second run is a no-op.
 func TestMigrateRunsRiver(t *testing.T) {
 	ctx := context.Background()
 	db := freshDB(t)
@@ -45,9 +42,6 @@ func TestMigrateRunsRiver(t *testing.T) {
 	}
 }
 
-// TestPendingCoversRiver applies only the goose migrations. The database
-// then has every app table but no River tables, so it is not ready: /readyz
-// must not report ok for a database the worker cannot use.
 func TestPendingCoversRiver(t *testing.T) {
 	ctx := context.Background()
 	db := freshDB(t)
@@ -72,8 +66,6 @@ func TestPendingCoversRiver(t *testing.T) {
 	}
 }
 
-// TestTemplateHasRiver checks the template that make test builds, so every
-// integration package gets River tables in its clone.
 func TestTemplateHasRiver(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	db, err := sql.Open("pgx", url)

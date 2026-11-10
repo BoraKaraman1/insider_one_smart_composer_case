@@ -10,8 +10,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// allowed is the transition table from the plan, written out a second time
-// on purpose: the test fails when the code's table and this one disagree.
 var allowed = map[State][]State{
 	Draft:            {Generating},
 	Generating:       {InReview, GenerationFailed, Cancelled},
@@ -21,7 +19,6 @@ var allowed = map[State][]State{
 	Sending:          {Completed, CompletedWithFailures, Cancelled},
 }
 
-// The state names are the campaign_state domain in migration 00002.
 func TestStates(t *testing.T) {
 	want := []string{"draft", "generating", "in_review", "generation_failed", "approved",
 		"sending", "completed", "completed_with_failures", "rejected", "cancelled"}
@@ -36,8 +33,6 @@ func TestStates(t *testing.T) {
 	}
 }
 
-// TestTransitionMatrix checks all 100 from/to pairs. Every pair that is not
-// in the table is rejected.
 func TestTransitionMatrix(t *testing.T) {
 	for _, from := range States() {
 		for _, to := range States() {
@@ -102,14 +97,11 @@ func TestValidateRevisionValid(t *testing.T) {
 	if rev.Content.EmailSubject != "Sepetin seni bekliyor" || !strings.Contains(rev.Content.SMSBody, "{{campaign_url}}") {
 		t.Errorf("content %+v", rev.Content)
 	}
-	// Warnings from the content validator are kept, with the same prefix.
 	if got := pathCodes(res.Warnings); !slices.Equal(got, []string{"/content/sms/body sms_multi_segment"}) {
 		t.Errorf("warnings %v", got)
 	}
 }
 
-// A human may type enum values in upper case. The edit is accepted, and the
-// document that gets stored is the normalized one.
 func TestValidateRevisionNormalizesInPlace(t *testing.T) {
 	doc := decode(t, `{"segment":{"version":1,"match":"ALL","conditions":[
 		{"kind":"ENUM_ATTRIBUTE","field":"CITY","op":"IN","value":["Istanbul","ANKARA"]},
@@ -130,8 +122,6 @@ func TestValidateRevisionNormalizesInPlace(t *testing.T) {
 	}
 }
 
-// Running revision.schema.json before the two validators would report every
-// problem twice. Each one must come out once, with its prefix.
 func TestValidateRevisionReportsEachErrorOnce(t *testing.T) {
 	doc := decode(t, `{
 		"segment":{"version":1,"match":"all","conditions":[{"kind":"enum_attribute","field":"city","op":"eq","value":"paris"}]},
@@ -150,7 +140,7 @@ func TestValidateRevisionReportsEachErrorOnce(t *testing.T) {
 func TestValidateRevisionTopLevel(t *testing.T) {
 	cases := []struct {
 		name, doc string
-		want      string // one error that must be present
+		want      string
 	}{
 		{"not an object", `[]`, " invalid_type"},
 		{"missing segment", `{"content":` + validContent + `}`, "/segment required"},

@@ -12,9 +12,7 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockprovider"
 )
 
-// mockproviderCmd serves the fake provider on its own database
-// (MOCKPROVIDER_DATABASE_URL), never the app's, so it cannot read messages.
-// It creates its tables at start. Chaos comes from MOCKPROVIDER_* variables.
+// Sahte sağlayıcı kendi veritabanında durur ve uygulama iletilerini okuyamaz.
 func mockproviderCmd(ctx context.Context, log *slog.Logger, getenv func(string) string) error {
 	srv, cleanup, err := newMockprovider(ctx, getenv)
 	if err != nil {

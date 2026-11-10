@@ -1,7 +1,3 @@
--- The generation event log: what the reviewer's SSE stream replays. The row
--- id is the SSE event id, so a reconnect resumes from Last-Event-ID. Every
--- insert is followed by pg_notify in the same transaction (internal/store),
--- so a listener is told only once the row is visible.
 
 -- +goose Up
 CREATE TABLE generation_events (
@@ -14,7 +10,6 @@ CREATE TABLE generation_events (
 );
 CREATE INDEX generation_events_campaign ON generation_events (campaign_id, id);
 
--- Which system prompt produced the call (llm.PromptVersion).
 ALTER TABLE llm_calls ADD COLUMN prompt_version text;
 
 -- +goose Down

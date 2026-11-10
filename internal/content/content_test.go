@@ -160,7 +160,7 @@ func TestValidate(t *testing.T) {
 	cases := []struct {
 		name               string
 		sms, subject, body string
-		want               []string // errors, "path code", in path order
+		want               []string
 	}{
 		{"Turkish copy with variables", "Merhaba {{first_name}}, sepetindeki ürünler seni bekliyor! %30 indirim: {{campaign_url}}",
 			"{{first_name}}, sepetin seni bekliyor", "Merhaba {{first_name}},\n\nSepetindeki ürünler hâlâ seni bekliyor.", nil},

@@ -34,8 +34,6 @@ func isEventsURL(raw, id string) bool {
 	return err == nil && u.Path == "/api/campaigns/"+id+"/events" && u.Host == ""
 }
 
-// eventsServer serves the API over real HTTP, since SSE needs streaming.
-// The hub listens on its own connection until the test ends.
 func eventsServer(t *testing.T, heartbeat time.Duration, writeTimeout time.Duration) (*httptest.Server, *pgxpool.Pool, *Server) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -63,8 +61,6 @@ type sseFrame struct {
 	Comment bool
 }
 
-// openStream starts a GET and delivers frames until the server ends the
-// stream, which closes the channel.
 func openStream(t *testing.T, srv *httptest.Server, path string, header map[string]string) (*http.Response, <-chan sseFrame) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,7 +108,6 @@ func openStream(t *testing.T, srv *httptest.Server, path string, header map[stri
 	return resp, frames
 }
 
-// next returns the next event frame, skipping heartbeats.
 func sseNext(t *testing.T, frames <-chan sseFrame, within time.Duration) sseFrame {
 	t.Helper()
 	timeout := time.After(within)
@@ -131,7 +126,6 @@ func sseNext(t *testing.T, frames <-chan sseFrame, within time.Duration) sseFram
 	}
 }
 
-// ended waits for the server to close the stream.
 func sseEnded(t *testing.T, frames <-chan sseFrame, within time.Duration) {
 	t.Helper()
 	timeout := time.After(within)
@@ -164,8 +158,6 @@ func addGenEvent(t *testing.T, p *pgxpool.Pool, id, typ string, payload map[stri
 	return n
 }
 
-// The stream sends the stored backlog first, then live events, and ends
-// after done.
 func TestEventsBacklogThenLive(t *testing.T) {
 	srv, p, _ := eventsServer(t, 15*time.Second, 0)
 	id := eventCampaign(t, p)
@@ -205,8 +197,6 @@ func TestEventsEndAfterFailed(t *testing.T) {
 	sseEnded(t, frames, 3*time.Second)
 }
 
-// A reconnect resumes after the last id it saw, from the Last-Event-ID
-// header (browsers and our fetch client) or ?after= (curl).
 func TestEventsResume(t *testing.T) {
 	srv, p, _ := eventsServer(t, 15*time.Second, 0)
 	id := eventCampaign(t, p)
@@ -261,8 +251,6 @@ func equalIDs(a, b []int64) bool {
 	return true
 }
 
-// The token travels only in the Authorization header: a query token would
-// end up in logs and browser history.
 func TestEventsAuth(t *testing.T) {
 	srv, p, _ := eventsServer(t, 15*time.Second, 0)
 	id := eventCampaign(t, p)
@@ -278,7 +266,6 @@ func TestEventsAuth(t *testing.T) {
 	}
 }
 
-// An idle stream gets heartbeat comments, so proxies keep it open.
 func TestEventsHeartbeat(t *testing.T) {
 	srv, p, _ := eventsServer(t, 50*time.Millisecond, 0)
 	id := eventCampaign(t, p)
@@ -293,8 +280,6 @@ func TestEventsHeartbeat(t *testing.T) {
 	}
 }
 
-// The server's WriteTimeout would cut a long stream. The handler clears its
-// write deadline, so the stream outlives it.
 func TestEventsOutliveWriteTimeout(t *testing.T) {
 	srv, p, _ := eventsServer(t, 50*time.Millisecond, 200*time.Millisecond)
 	id := eventCampaign(t, p)
@@ -306,8 +291,6 @@ func TestEventsOutliveWriteTimeout(t *testing.T) {
 	}
 }
 
-// A missed notification is covered by the poll: an event inserted without
-// pg_notify still arrives.
 func TestEventsPollCoversMissedNotify(t *testing.T) {
 	srv, p, _ := eventsServer(t, 15*time.Second, 0)
 	id := eventCampaign(t, p)
@@ -323,8 +306,6 @@ func TestEventsPollCoversMissedNotify(t *testing.T) {
 	}
 }
 
-// liveStack runs everything in the test: the API, a River worker with the
-// generate worker, and the in-process mock LLM behind the real client.
 func liveStack(t *testing.T) (*httptest.Server, *pgxpool.Pool, *mockllm.Server) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -402,7 +383,6 @@ func startGenerate(t *testing.T, srv *httptest.Server, id string, version int) s
 	return u
 }
 
-// collect reads one generation's stream to its end.
 func sseCollect(t *testing.T, srv *httptest.Server, path string, header map[string]string) []sseFrame {
 	t.Helper()
 	_, frames := openStream(t, srv, path, header)
@@ -423,10 +403,6 @@ func sseCollect(t *testing.T, srv *httptest.Server, path string, header map[stri
 	}
 }
 
-// TestGenerateEndToEnd: create, generate and watch the stream with a real
-// worker. Events arrive in order, the deltas rebuild the stored copy, a
-// reconnect gets only later events, and a regenerate streams only its own
-// events.
 func TestGenerateEndToEnd(t *testing.T) {
 	srv, _, _ := liveStack(t)
 	code, created := apiCall(t, srv, "POST", "/api/campaigns", createBody(specBrief, okURL))
@@ -466,15 +442,12 @@ func TestGenerateEndToEnd(t *testing.T) {
 		t.Errorf("deltas rebuild %q; stored revision %v", rebuilt, rev)
 	}
 
-	// Reconnect after segment_ready: only the later events come back.
 	path := "/api/campaigns/" + id + "/events"
 	resumed := sseCollect(t, srv, path, map[string]string{"Authorization": bearer["Authorization"], "Last-Event-ID": strconv.FormatInt(events[1].ID, 10)})
 	if len(resumed) != len(events)-2 || resumed[0].ID != events[2].ID || resumed[len(resumed)-1].Event != "done" {
 		t.Errorf("resumed %d events from id %d, want the %d after segment_ready", len(resumed), resumed[0].ID, len(events)-2)
 	}
 
-	// Regenerate: the new stream starts with its own started event and does
-	// not end on the first generation's done.
 	version := int(view["campaign"].(map[string]any)["version"].(float64))
 	again := sseCollect(t, srv, startGenerate(t, srv, id, version), bearer)
 	if len(again) < 3 || again[0].Event != "started" || again[0].ID <= events[len(events)-1].ID || again[len(again)-1].Event != "done" {

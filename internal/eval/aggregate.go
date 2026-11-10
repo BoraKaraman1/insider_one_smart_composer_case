@@ -6,10 +6,8 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// CallRow is one llm_calls row.
 type CallRow = store.LLMCallRow
 
-// Numbers are the llm_calls numbers of plan 3, 2.4.
 type Numbers struct {
 	Stages       map[string]StageNumbers `json:"stages"`
 	Generations  int                     `json:"generations"`
@@ -17,31 +15,26 @@ type Numbers struct {
 	OutputTokens int                     `json:"output_tokens"`
 }
 
-// StageNumbers are the numbers of one stage over every generation.
 type StageNumbers struct {
 	FirstAttemptValid  int            `json:"first_attempt_valid"`
 	ValidAfterRepair   int            `json:"valid_after_repair"`
 	Failed             int            `json:"failed"`
 	ValidationAttempts int            `json:"validation_attempts"`
 	Refusals           int            `json:"refusals"`
-	TransportRetries   map[string]int `json:"transport_retries"` // by error class
-	FailureCodes       map[string]int `json:"failure_codes"`     // by validation code
+	TransportRetries   map[string]int `json:"transport_retries"`
+	FailureCodes       map[string]int `json:"failure_codes"`
 	LatencyP50MS       int            `json:"latency_p50_ms"`
 	LatencyP95MS       int            `json:"latency_p95_ms"`
 }
 
 const transportOutcome = "transport_error"
 
-// Aggregate turns llm_calls rows, in id order, into the reported numbers.
-// Each (campaign, stage) that ran ends as exactly one of first-attempt
-// valid, valid after repair, or failed. Transport rows are never validation
-// attempts. A refusal is an attempt that fails the stage.
 func Aggregate(rows []CallRow) Numbers {
 	n := Numbers{Stages: map[string]StageNumbers{}}
 	type key struct{ campaign, stage string }
 	type run struct {
 		attempts int
-		last     string // outcome of the last validation attempt
+		last     string
 	}
 	runs := map[key]*run{}
 	var order []key
@@ -103,7 +96,6 @@ func stageOf(n Numbers, stage string) StageNumbers {
 	return s
 }
 
-// percentile is the nearest-rank percentile p (0 to 100) of values.
 func percentile(values []int, p int) int {
 	if len(values) == 0 {
 		return 0

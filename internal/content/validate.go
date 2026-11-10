@@ -13,47 +13,30 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// Rendered length limits (runes, worst case). They match the maxLength of the
-// raw templates in schemas/content.schema.json; content_test.go checks that.
 const (
 	SMSMaxChars     = 160
 	SubjectMaxChars = 80
 )
 
-// Content is validated copy.
 type Content struct {
 	SMSBody      string
 	EmailSubject string
 	EmailBody    string
-	// SMS is the pessimistic estimate: longest variable values, and Turkish
-	// letters in names and city.
-	SMS SMSInfo
+	SMS          SMSInfo
 }
 
-// Banned patterns. They are checked on the text with every variable filled
-// in by a placeholder, so "{{city}}.com" is caught too. {{campaign_url}} is
-// the one allowed link and is filled with a space.
 var (
 	schemeRe = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://|www\.`)
-	// A bare domain: dot-separated labels ending in a common TLD. Labels are
-	// Unicode-aware, so a Cyrillic lookalike such as "іnsider.com" is caught.
 	domainRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+` +
 		`(?:com|net|org|info|biz|io|co|ai|app|dev|me|ly|gl|to|cc|tv|xyz|link|shop|store|site|online|tr|eu|uk|de|us))(?:$|[^\p{L}\p{N}_-])`)
-	// A domain with any TLD, given away by the path that follows it, such as
-	// "evil.top/login". The TLD starts with a letter, so "10.30/11" passes.
 	domainPathRe = regexp.MustCompile(`(?:^|[^\p{L}\p{N}@._-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}[\p{L}\p{N}-]+/)`)
-	// What may touch {{campaign_url}}. Anything else could extend the link
-	// into another one: "{{campaign_url}}@evil.top", "{{campaign_url}}.evil.com".
-	// Before it: the start or white space, then opening punctuation.
-	// After it: closing punctuation, then white space or the end.
-	urlBeforeRe = regexp.MustCompile(`(?:^|[\s\p{Z}])[(\["'“‘«:]*$`)
-	urlAfterRe  = regexp.MustCompile(`^[.,!?;:)\]"'”’»]*(?:[\s\p{Z}]|$)`)
-	ipRe        = regexp.MustCompile(`(?:^|[^\p{N}.])(\d{1,3}(?:\.\d{1,3}){3})(?:$|[^\p{N}.])`)
-	emailRe     = regexp.MustCompile(`[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+`)
-	htmlRe      = regexp.MustCompile(`<\s*/?\s*[A-Za-z][^>]*>`)
+	urlBeforeRe  = regexp.MustCompile(`(?:^|[\s\p{Z}])[(\["'“‘«:]*$`)
+	urlAfterRe   = regexp.MustCompile(`^[.,!?;:)\]"'”’»]*(?:[\s\p{Z}]|$)`)
+	ipRe         = regexp.MustCompile(`(?:^|[^\p{N}.])(\d{1,3}(?:\.\d{1,3}){3})(?:$|[^\p{N}.])`)
+	emailRe      = regexp.MustCompile(`[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+`)
+	htmlRe       = regexp.MustCompile(`<\s*/?\s*[A-Za-z][^>]*>`)
 )
 
-// ValidateJSON parses and validates content given as raw JSON.
 func ValidateJSON(set *schema.Set, data []byte) (Content, validation.Result) {
 	doc, err := schema.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -64,10 +47,6 @@ func ValidateJSON(set *schema.Set, data []byte) (Content, validation.Result) {
 	return Validate(set, doc)
 }
 
-// Validate checks decoded content (from schema.Decode): the schema first,
-// then templates, banned links, emails and HTML, and the worst-case rendered
-// length. Every problem is reported. SMS encoding and segment count are
-// warnings only.
 func Validate(set *schema.Set, doc any) (Content, validation.Result) {
 	var res validation.Result
 	rawTooLong := map[string]bool{}
@@ -93,7 +72,7 @@ func Validate(set *schema.Set, doc any) (Content, validation.Result) {
 	for _, f := range fields {
 		s, ok := lookup(doc, f.a, f.b)
 		if !ok {
-			continue // the schema already reported it
+			continue
 		}
 		values[f.path] = s
 		parts, issues := Parse(s)
@@ -102,7 +81,7 @@ func Validate(set *schema.Set, doc any) (Content, validation.Result) {
 		}
 		checkBans(&res, f.path, parts)
 		if len(issues) > 0 {
-			continue // lengths of a broken template mean nothing
+			continue
 		}
 		if f.limit > 0 && !rawTooLong[f.path] {
 			if n := utf8.RuneCountInString(worstCase(parts, false)); n > f.limit {
@@ -139,7 +118,6 @@ func Validate(set *schema.Set, doc any) (Content, validation.Result) {
 	}, res
 }
 
-// checkBans reports links, email addresses and HTML in the literal text.
 func checkBans(res *validation.Result, path string, parts []Part) {
 	text := fill(parts)
 	if urlTouched(parts) {
@@ -161,8 +139,7 @@ func checkBans(res *validation.Result, path string, parts []Part) {
 	}
 }
 
-// fill joins the parts with a placeholder for each variable: a space for
-// {{campaign_url}}, an "x" for the others.
+// Değişkenler yer tutucuyla dolar ki yapışık adres de yakalansın.
 func fill(parts []Part) string {
 	var b strings.Builder
 	for _, p := range parts {
@@ -178,7 +155,6 @@ func fill(parts []Part) string {
 	return b.String()
 }
 
-// urlTouched reports whether any {{campaign_url}} has text attached to it.
 func urlTouched(parts []Part) bool {
 	for i, p := range parts {
 		if p.Var == "campaign_url" &&

@@ -28,9 +28,6 @@ const (
 	editContent = `{"sms":{"body":"Selam {{first_name}}, indirim burada: {{campaign_url}}"},"email":{"subject":"Sepetin seni bekliyor","body":"Selam {{first_name}}, indirim burada: {{campaign_url}}"}}`
 )
 
-// campaignAPI builds the API over a seeded clone. CAMPAIGN_URL_HOSTS comes
-// through ConfigFromEnv, as in production, and "now" is the seed anchor so
-// audience counts match docs/seed-data.md.
 func campaignAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -43,7 +40,6 @@ func campaignAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	return handler(t, &Server{Config: cfg, Pool: p, Now: func() time.Time { return meta.AsOf }}), p
 }
 
-// fixture is a campaign put straight into a state, with one LLM revision.
 type fixture struct{ ID, Revision string }
 
 func insertCampaign(t *testing.T, p *pgxpool.Pool, state string, version int) fixture {
@@ -57,8 +53,6 @@ func insertCampaign(t *testing.T, p *pgxpool.Pool, state string, version int) fi
 		VALUES ($1, 1, 'llm', $2, 'sms', 'subject', 'body') RETURNING id::text`, f.ID, editSegment).Scan(&f.Revision); err != nil {
 		t.Fatal(err)
 	}
-	// Approval fields are set in every state: the table's CHECKs then accept
-	// any state, and the test exercises only the state machine.
 	if _, err := p.Exec(ctx, `UPDATE campaigns SET state = $2, version = $3, current_revision_id = $4,
 		approved_revision_id = $4, approved_by = 'fixture', approved_at = now() WHERE id = $1`, f.ID, state, version, f.Revision); err != nil {
 		t.Fatal(err)
@@ -70,7 +64,7 @@ type campaignRow struct {
 	State     string
 	Version   int
 	Revisions int
-	Events    []string // "from>to"
+	Events    []string
 	Actors    []string
 }
 
@@ -101,7 +95,6 @@ func loadCampaign(t *testing.T, p *pgxpool.Pool, id string) campaignRow {
 	return r
 }
 
-// view is the part of a campaign response these tests rely on.
 type view struct {
 	Campaign struct {
 		ID          string `json:"id"`
@@ -165,7 +158,6 @@ func TestCreateAndGetCampaign(t *testing.T) {
 		t.Errorf("get %+v (revision %v), want the created campaign with no revision", got.Campaign, got.Revision)
 	}
 
-	// Limits are inclusive and count characters, not bytes.
 	longest := strings.Repeat("ş", 2000)
 	url40 := "https://shop.example/" + strings.Repeat("k", 19)
 	if rec := do(h, "POST", "/api/campaigns", createBody(longest, url40), bearer); rec.Code != http.StatusCreated {
@@ -205,7 +197,7 @@ func TestCreateCampaignRejects(t *testing.T) {
 	cases := []struct {
 		name, body string
 		status     int
-		want       string // "path code"; a trailing space means any code
+		want       string
 	}{
 		{"broken JSON", `{`, 400, " invalid_json"},
 		{"not an object", `[]`, 422, " invalid_type"},
@@ -289,7 +281,6 @@ func TestReject(t *testing.T) {
 		t.Errorf("stored %+v; want rejected, version 4, one audit row with an actor", got)
 	}
 
-	// Rejected is terminal, and only a campaign in review can be rejected.
 	if rec := do(h, "POST", "/api/campaigns/"+f.ID+"/reject", versionBody(4), bearer); rec.Code != http.StatusConflict {
 		t.Errorf("reject twice: %d, want 409", rec.Code)
 	}
@@ -344,8 +335,6 @@ func TestCancelByState(t *testing.T) {
 	}
 }
 
-// Cancel takes the queued messages out of the queue in the same transaction.
-// Messages that were sent, or that a worker is sending right now, are left.
 func TestCancelSkipsQueuedMessages(t *testing.T) {
 	h, p := campaignAPI(t)
 	ctx := context.Background()
@@ -409,8 +398,6 @@ func TestCancelSkipsQueuedMessages(t *testing.T) {
 	}
 }
 
-// Two reviewers press a button at the same moment. Exactly one request wins
-// and the others get 409.
 func TestConcurrentRequestsOneWins(t *testing.T) {
 	h, p := campaignAPI(t)
 	f := insertCampaign(t, p, "in_review", 0)
@@ -448,8 +435,6 @@ func editBody(base string, version int, segment, content string) string {
 	return fmt.Sprintf(`{"base_revision_id":%q,"version":%d,"revision":{"segment":%s,"content":%s}}`, base, version, segment, content)
 }
 
-// A human edit with upper-case enums is accepted, stored in lower case as
-// revision 2, and its audience is counted again. The campaign stays in review.
 func TestEditStoresNormalizedRevision(t *testing.T) {
 	h, p := campaignAPI(t)
 	ctx := context.Background()
@@ -493,7 +478,6 @@ func TestEditStoresNormalizedRevision(t *testing.T) {
 	if current != v.Revision.ID {
 		t.Errorf("campaign points at revision %s, want the new one %s", current, v.Revision.ID)
 	}
-	// docs/seed-data.md: the example rule matches 315 users, 210 with SMS consent.
 	if total != 315 || smsEligible != 210 || emailOK <= 0 || emailOK > total {
 		t.Errorf("counts %d total, %d sms, %d email; docs/seed-data.md says 315 and 210", total, smsEligible, emailOK)
 	}
@@ -505,7 +489,6 @@ func TestEditStoresNormalizedRevision(t *testing.T) {
 		t.Errorf("stored %+v; want in_review, version 2, two revisions, one audit row", got)
 	}
 
-	// The reviewer's copy is now stale: its base revision and version are old.
 	if rec := do(h, "POST", "/api/campaigns/"+f.ID+"/revisions", editBody(f.Revision, 2, editSegment, editContent), bearer); rec.Code != http.StatusConflict {
 		t.Errorf("edit on top of a replaced revision: %d, want 409", rec.Code)
 	}
@@ -517,8 +500,6 @@ func TestEditStoresNormalizedRevision(t *testing.T) {
 	}
 }
 
-// Human edits go through the same validator as LLM output (rule 7). An
-// invalid edit gets 422, each problem once, and nothing is stored.
 func TestInvalidEditIsNotStored(t *testing.T) {
 	h, p := campaignAPI(t)
 	f := insertCampaign(t, p, "in_review", 1)
@@ -529,7 +510,7 @@ func TestInvalidEditIsNotStored(t *testing.T) {
 	segment := func(cond string) string { return `{"version":1,"match":"all","conditions":[` + cond + `]}` }
 	cases := []struct {
 		name, segment, content string
-		want                   []string // "/segment... code" or "/content... code", as suffixes
+		want                   []string
 	}{
 		{"city outside the catalog", segment(`{"kind":"enum_attribute","field":"city","op":"eq","value":"paris"}`), editContent,
 			[]string{"/segment/conditions/0/value unknown_value"}},
@@ -584,7 +565,6 @@ func TestInvalidEditIsNotStored(t *testing.T) {
 	}
 }
 
-// Only a campaign in review can be edited.
 func TestEditOutsideReviewConflicts(t *testing.T) {
 	h, p := campaignAPI(t)
 	for _, state := range []string{"draft", "generating", "generation_failed", "approved", "sending", "completed", "completed_with_failures", "rejected", "cancelled"} {

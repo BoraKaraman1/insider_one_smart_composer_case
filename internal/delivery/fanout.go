@@ -20,7 +20,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// DB is the app database. *pgxpool.Pool satisfies it.
 type DB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -28,32 +27,21 @@ type DB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// ManyInserter inserts River jobs in a transaction. *river.Client[pgx.Tx]
-// satisfies it.
 type ManyInserter interface {
 	InsertManyTx(ctx context.Context, tx pgx.Tx, params []river.InsertManyParams) ([]*rivertype.JobInsertResult, error)
 }
 
-// FanoutWorker turns an approved campaign into messages and send jobs.
 type FanoutWorker struct {
 	river.WorkerDefaults[jobs.FanoutArgs]
 	DB   DB
 	Jobs ManyInserter
-	// Now is the asOf of the recipient query: the audience is counted when
-	// the fan-out runs, not at approval.
-	Now func() time.Time
+	Now  func() time.Time
 
 	once    sync.Once
 	schemas *schema.Set
 	err     error
 }
 
-// Work runs the fan-out in one transaction: a message per consenting
-// recipient per channel, a send job per message on the channel's queue,
-// and approved -> sending. With no message at all (consent revoked after
-// approval), the campaign completes at once, since no send job will run
-// the completion check. A second run finds the campaign sending and
-// changes nothing.
 func (w *FanoutWorker) Work(ctx context.Context, job *river.Job[jobs.FanoutArgs]) error {
 	w.once.Do(func() { w.schemas, w.err = schema.Load() })
 	if w.err != nil {
@@ -76,7 +64,7 @@ func (w *FanoutWorker) Work(ctx context.Context, job *river.Job[jobs.FanoutArgs]
 	switch campaign.State(c.State) {
 	case campaign.Approved:
 	case campaign.Sending, campaign.Completed, campaign.CompletedWithFailures:
-		return nil // already fanned out
+		return nil
 	default:
 		return river.JobCancel(fmt.Errorf("fanout: campaign is %s, not approved", c.State))
 	}

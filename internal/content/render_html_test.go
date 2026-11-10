@@ -2,8 +2,6 @@ package content
 
 import "testing"
 
-// Blank lines start paragraphs, single line breaks stay breaks, and the
-// campaign URL is the one link.
 func TestRenderEmailHTMLLayout(t *testing.T) {
 	got, err := RenderEmailHTML("Merhaba {{first_name}},\n\nSatır 1\nSatır 2\n\nBak: {{campaign_url}}", RenderContext{FirstName: "Ali", CampaignURL: testURL})
 	if err != nil {

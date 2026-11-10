@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// POST /cancel cancels the queued generate job through River, so a worker
-// never starts it.
 func TestCancelCancelsGenerateJob(t *testing.T) {
 	h, p := generateAPI(t)
 	f := insertCampaign(t, p, "draft", 0)

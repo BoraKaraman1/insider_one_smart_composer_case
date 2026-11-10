@@ -32,14 +32,12 @@ const (
 	smsBody      = "Merhaba {{first_name}}, sepetin seni bekliyor: {{campaign_url}}"
 	emailSubject = "{{first_name}}, sepetin seni bekliyor"
 	emailBody    = "Merhaba {{first_name}} {{last_name}}, {{city}} için indirim: {{campaign_url}}"
-	// The worked example: Istanbul cart abandoners (docs/seed-data.md).
-	abandoners = `{"version":1,"match":"all","conditions":[
+	abandoners   = `{"version":1,"match":"all","conditions":[
 		{"kind":"enum_attribute","field":"city","op":"eq","value":"istanbul"},
 		{"kind":"event","event":"cart_add","within_days":30,"negate":false},
 		{"kind":"event","event":"purchase","within_days":30,"negate":true}]}`
 )
 
-// appPool opens a seeded clone of the app database.
 func appPool(t *testing.T) (*pgxpool.Pool, testdb.Seed) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -51,17 +49,13 @@ func appPool(t *testing.T) (*pgxpool.Pool, testdb.Seed) {
 	return p, meta
 }
 
-// call is one request the provider received.
 type call struct {
 	Key    string
-	Chaos  string // the X-Chaos the test forced, "" for none
+	Chaos  string
 	Body   map[string]any
-	Status int // 0 when the connection was dropped or the client left
+	Status int
 }
 
-// provider runs the real mock provider on its own database, behind a thin
-// wrapper that records every request and can force outcomes per key with
-// X-Chaos. Hooks let a test act while a request is in flight.
 type provider struct {
 	URL   string
 	inner http.Handler
@@ -70,8 +64,8 @@ type provider struct {
 	mu            sync.Mutex
 	script        map[string][]string
 	calls         []call
-	onRequest     func(key string) // before the provider handles the request
-	afterResponse func(key string) // after it wrote its answer
+	onRequest     func(key string)
+	afterResponse func(key string)
 }
 
 func newProvider(t *testing.T, cfg mockprovider.Config) *provider {
@@ -93,8 +87,6 @@ func newProvider(t *testing.T, cfg mockprovider.Config) *provider {
 	return pr
 }
 
-// force sets the X-Chaos of the next requests for key, in order. Requests
-// past the script get no header ("" means the provider's own chaos).
 func (p *provider) force(key string, chaos ...string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -144,7 +136,7 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	before, after := p.onRequest, p.afterResponse
 	p.mu.Unlock()
 
-	r.Header.Del("X-Chaos") // only the test decides
+	r.Header.Del("X-Chaos")
 	if chaos != "" {
 		r.Header.Set("X-Chaos", chaos)
 	}
@@ -175,8 +167,6 @@ func (p *provider) stats(t *testing.T) mockprovider.Stats {
 	return s
 }
 
-// statusRecorder notes the status and still lets the provider hijack the
-// connection for the drop mode.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -204,7 +194,6 @@ func (r *statusRecorder) Flush() { _ = http.NewResponseController(r.ResponseWrit
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// countingLimiter hands out tokens at once and counts them.
 type countingLimiter struct{ n atomic.Int64 }
 
 func (c *countingLimiter) Wait(ctx context.Context) error {
@@ -214,9 +203,6 @@ func (c *countingLimiter) Wait(ctx context.Context) error {
 
 var errCrash = errors.New("injected crash: the database is gone")
 
-// flakyDB is the app database until down is set. Then every call fails, as
-// if the worker process died. It injects a crash between the provider call
-// and the state update without a hook in the worker.
 type flakyDB struct {
 	*pgxpool.Pool
 	down atomic.Bool
@@ -254,8 +240,6 @@ type errRow struct{}
 
 func (errRow) Scan(...any) error { return errCrash }
 
-// sendEnv is a seeded app database, a mock provider and a send worker with
-// a fixed clock, a fixed backoff and counting limiters.
 type sendEnv struct {
 	pool    *pgxpool.Pool
 	asOf    time.Time
@@ -264,11 +248,10 @@ type sendEnv struct {
 	tokens  map[string]*countingLimiter
 	worker  *SendWorker
 	logs    *bytes.Buffer
-	retries []int // the retry numbers Backoff was called with
+	retries []int
 	mu      sync.Mutex
 }
 
-// fixedBackoff is what the test Backoff returns, so snoozes are exact.
 const fixedBackoff = 3 * time.Second
 
 func newSendEnv(t *testing.T, cfg mockprovider.Config) *sendEnv {
@@ -314,15 +297,11 @@ func (e *sendEnv) tokensTaken() int64 { return e.tokens["sms"].n.Load() + e.toke
 
 type camp struct{ ID, Revision string }
 
-// insertSendingCampaign creates a campaign that is approved and sending,
-// with one revision.
 func insertSendingCampaign(t *testing.T, p *pgxpool.Pool) camp {
 	t.Helper()
 	return insertCampaignIn(t, p, "sending", 3)
 }
 
-// insertCampaignIn creates a campaign in a state with an approved revision
-// of the abandoners rule and the test copy.
 func insertCampaignIn(t *testing.T, p *pgxpool.Pool, state string, version int) camp {
 	t.Helper()
 	ctx := context.Background()
@@ -343,7 +322,6 @@ func insertCampaignIn(t *testing.T, p *pgxpool.Pool, state string, version int) 
 	return c
 }
 
-// consentingUsers returns n users with both consents and a non-empty name.
 func consentingUsers(t *testing.T, p *pgxpool.Pool, n int) []string {
 	t.Helper()
 	rows, err := p.Query(context.Background(), `SELECT id::text FROM users
@@ -358,7 +336,6 @@ func consentingUsers(t *testing.T, p *pgxpool.Pool, n int) []string {
 	return ids
 }
 
-// insertMessage adds a queued message. extra is an optional SET clause.
 func insertMessage(t *testing.T, p *pgxpool.Pool, c camp, user, channel, extra string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -439,7 +416,6 @@ func (e *sendEnv) work(messageID string) error {
 	return e.worker.Work(context.Background(), sendJob(messageID))
 }
 
-// snoozed reports the delay of a river.JobSnooze error.
 func snoozed(err error) (time.Duration, bool) {
 	var s *river.JobSnoozeError
 	if errors.As(err, &s) {

@@ -9,25 +9,17 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
 )
 
-// FirstNameFallback replaces an empty first name.
 const FirstNameFallback = "Değerli müşterimiz"
 
-// RenderContext is everything a template can show about a recipient. It is
-// a dedicated struct, never the users row, so a field that is not here
-// (email, phone) cannot be rendered whatever a template says (rule 9).
 type RenderContext struct {
 	FirstName   string
 	LastName    string
-	City        string // the slug; rendered as its display name
-	CampaignURL string // from the campaign, never from the model
+	City        string
+	CampaignURL string
 }
 
-// ErrInvalidTemplate is returned for a template the parser rejects. The
-// validator rejects it first; this is the second line.
 var ErrInvalidTemplate = errors.New("content: invalid template")
 
-// values returns each variable's text: fallbacks applied, then cut to the
-// variable's render limit, so the validator's worst case holds.
 func (rc RenderContext) values() map[string]string {
 	first := rc.FirstName
 	if strings.TrimSpace(first) == "" {
@@ -64,9 +56,7 @@ func parse(tmpl string) ([]Part, error) {
 	return parts, nil
 }
 
-// RenderText renders a template as plain text (SMS, email subject). It is
-// one pass over the parsed parts: a value is written as is and never parsed
-// again, so a name like "{{first_name}}" prints literally.
+// Değer yeniden ayrıştırılmaz ki süslü parantezli ad olduğu gibi basılsın.
 func RenderText(tmpl string, rc RenderContext) (string, error) {
 	parts, err := parse(tmpl)
 	if err != nil {
@@ -84,7 +74,6 @@ func RenderText(tmpl string, rc RenderContext) (string, error) {
 	return b.String(), nil
 }
 
-// htmlPiece is text, or the campaign link.
 type htmlPiece struct {
 	Text string
 	URL  string
@@ -98,17 +87,12 @@ var emailHTML = template.Must(template.New("email").Parse(`<!doctype html>
 </body></html>
 `))
 
-// RenderEmailHTML renders an email body as HTML. The copy is plain text;
-// html/template escapes every piece, so markup in copy or in a name is
-// shown, never run. Blank lines start paragraphs; {{campaign_url}} becomes a
-// link.
 func RenderEmailHTML(tmpl string, rc RenderContext) (string, error) {
 	parts, err := parse(tmpl)
 	if err != nil {
 		return "", err
 	}
 	v := rc.values()
-	// paragraphs > lines > pieces
 	paras := [][][]htmlPiece{{{}}}
 	add := func(p htmlPiece) {
 		para := paras[len(paras)-1]
@@ -125,7 +109,6 @@ func RenderEmailHTML(tmpl string, rc RenderContext) (string, error) {
 				if i > 0 {
 					para := paras[len(paras)-1]
 					if len(para[len(para)-1]) == 0 && len(para) > 1 {
-						// A blank line: drop it and start a paragraph.
 						paras[len(paras)-1] = para[:len(para)-1]
 						paras = append(paras, [][]htmlPiece{{}})
 					} else {

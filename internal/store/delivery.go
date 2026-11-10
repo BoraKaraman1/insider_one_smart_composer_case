@@ -9,25 +9,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// SetApproval records who approved which revision, while the campaign is
-// still in review at version. It reports false when the campaign moved on.
-// It runs before the in_review -> approved transition, because the CHECK on
-// campaigns wants an approved campaign to name its approved revision.
+// Onay alanları durum değişmeden yazılır çünkü kısıt onaylı kampanyada sürüm ister.
 func SetApproval(ctx context.Context, db DB, id, revisionID, by string, version int) (bool, error) {
 	tag, err := db.Exec(ctx, `UPDATE campaigns SET approved_revision_id = $2, approved_by = $3, approved_at = now(), updated_at = now()
 		WHERE id = $1 AND state = 'in_review' AND version = $4`, id, revisionID, by, version)
 	return tag.RowsAffected() == 1, err
 }
 
-// LockCampaign reads a campaign and locks its row for the transaction.
 func LockCampaign(ctx context.Context, db DB, id string) (Campaign, error) {
 	return scanCampaign(db.QueryRow(ctx, `SELECT `+campaignCols+` FROM campaigns WHERE id = $1 FOR UPDATE`, id))
 }
 
-// InsertMessagesFrom inserts one queued message per user id that
-// audienceSQL selects, skipping any that already exist, and returns the new
-// message ids. audienceSQL comes from segment.AudienceQuery (consent
-// included) with its args as $1..$n.
 func InsertMessagesFrom(ctx context.Context, db DB, campaignID, revisionID, channel, audienceSQL string, args []any) ([]string, error) {
 	n := len(args)
 	sql := `INSERT INTO messages (campaign_id, revision_id, user_id, channel)
@@ -41,20 +33,17 @@ func InsertMessagesFrom(ctx context.Context, db DB, campaignID, revisionID, chan
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
-// CountMessages counts a campaign's messages.
 func CountMessages(ctx context.Context, db DB, campaignID string) (int, error) {
 	var n int
 	err := db.QueryRow(ctx, `SELECT count(*) FROM messages WHERE campaign_id = $1`, campaignID).Scan(&n)
 	return n, err
 }
 
-// Outcome is what a campaign's messages add up to.
 type Outcome struct {
-	Unfinished int // queued or sending
-	Failures   int // failed or dead
+	Unfinished int
+	Failures   int
 }
 
-// MessageOutcome counts a campaign's unfinished and failed messages.
 func MessageOutcome(ctx context.Context, db DB, campaignID string) (Outcome, error) {
 	var o Outcome
 	err := db.QueryRow(ctx, `SELECT count(*) FILTER (WHERE state IN ('queued', 'sending')),
@@ -63,9 +52,6 @@ func MessageOutcome(ctx context.Context, db DB, campaignID string) (Outcome, err
 	return o, err
 }
 
-// Send is everything the send worker needs about one message: its state,
-// its campaign, its copy and its recipient. Contact fields go to the
-// provider only; they are never logged.
 type Send struct {
 	ID, CampaignID, Channel, State string
 	Attempts                       int
@@ -76,11 +62,9 @@ type Send struct {
 	EmailBody                      string
 	FirstName, LastName, City      string
 	Phone, Email                   string
-	Consent                        bool // for this message's channel
+	Consent                        bool
 }
 
-// LoadSend reads a message with its campaign, revision and recipient, or
-// returns ErrNotFound.
 func LoadSend(ctx context.Context, db DB, id string) (Send, error) {
 	var s Send
 	err := db.QueryRow(ctx, `SELECT m.id::text, m.campaign_id::text, m.channel::text, m.state::text, m.attempts, m.first_attempt_at,
@@ -100,25 +84,16 @@ func LoadSend(ctx context.Context, db DB, id string) (Send, error) {
 	return s, err
 }
 
-// Every message update below is guarded by the states it may come from, so
-// a late or duplicate run cannot move a message backwards. Each reports
-// whether it applied.
-
 func applied(tag interface{ RowsAffected() int64 }, err error) (bool, error) {
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
-// SkipMessage marks a queued (or reclaimed sending) message skipped.
 func SkipMessage(ctx context.Context, db DB, id, class string) (bool, error) {
 	return applied(db.Exec(ctx, `UPDATE messages SET state = 'skipped', last_error_class = $2, next_attempt_at = NULL, updated_at = now()
 		WHERE id = $1 AND state IN ('queued', 'sending')`, id, class))
 }
 
-// ClaimMessage moves a message to sending for one attempt and counts it. A
-// message in sending may be claimed again: its last run crashed. The claim
-// is the dispatch cutoff: it applies only while the recipient consents on
-// the message's channel and the campaign is not cancelled. It returns the
-// attempt number and the first attempt time, or ok false.
+// Gönderimde kalan mesaj çöken denemeden sonra yeniden alınabilir.
 func ClaimMessage(ctx context.Context, db DB, id string, now time.Time) (attempts int, first time.Time, ok bool, err error) {
 	err = db.QueryRow(ctx, `UPDATE messages m SET state = 'sending', attempts = m.attempts + 1,
 			first_attempt_at = coalesce(m.first_attempt_at, $2), next_attempt_at = NULL, updated_at = now()
@@ -133,30 +108,23 @@ func ClaimMessage(ctx context.Context, db DB, id string, now time.Time) (attempt
 	return attempts, first, err == nil, err
 }
 
-// MarkSent records the provider's id.
 func MarkSent(ctx context.Context, db DB, id, providerID string, at time.Time) (bool, error) {
 	return applied(db.Exec(ctx, `UPDATE messages SET state = 'sent', provider_message_id = $2, sent_at = $3, updated_at = now()
 		WHERE id = $1 AND state = 'sending'`, id, providerID, at))
 }
 
-// MarkRetry puts a message back in the queue until next.
 func MarkRetry(ctx context.Context, db DB, id, class, lastError string, next time.Time) (bool, error) {
 	return applied(db.Exec(ctx, `UPDATE messages SET state = 'queued', last_error_class = $2, last_error = $3, next_attempt_at = $4, updated_at = now()
 		WHERE id = $1 AND state = 'sending'`, id, class, lastError, next))
 }
 
-// MarkFinal ends a message as failed or dead.
 func MarkFinal(ctx context.Context, db DB, id, state, class, lastError string) (bool, error) {
 	return applied(db.Exec(ctx, `UPDATE messages SET state = $2, last_error_class = $3, last_error = $4, next_attempt_at = NULL, updated_at = now()
 		WHERE id = $1 AND state = 'sending'`, id, state, class, lastError))
 }
 
-// MessageStates are the counted states of the stats API. Retrying is
-// queued with attempts above 0 and is not counted as queued.
 var MessageStates = []string{"queued", "retrying", "sending", "sent", "failed", "dead", "skipped"}
 
-// DeliveryStats counts a campaign's messages per channel and state, with
-// every state of both channels present.
 func DeliveryStats(ctx context.Context, db DB, campaignID string) (map[string]map[string]int, error) {
 	out := map[string]map[string]int{}
 	for _, ch := range []string{"sms", "email"} {
@@ -165,6 +133,7 @@ func DeliveryStats(ctx context.Context, db DB, campaignID string) (map[string]ma
 			out[ch][s] = 0
 		}
 	}
+	// Yeniden denenen kuyrukta durur ama kuyruk sayısına girmez.
 	rows, err := db.Query(ctx, `SELECT channel::text,
 			CASE WHEN state = 'queued' AND attempts > 0 THEN 'retrying' ELSE state::text END, count(*)
 		FROM messages WHERE campaign_id = $1 GROUP BY 1, 2`, campaignID)
@@ -183,10 +152,6 @@ func DeliveryStats(ctx context.Context, db DB, campaignID string) (map[string]ma
 	return out, rows.Err()
 }
 
-// Attention thresholds (rule 6). Sending for longer than twice the provider
-// timeout means the worker probably died. A message never attempted two
-// minutes after fan-out means nothing drains the queue: at 100/s per channel
-// that is 12,000 messages ahead of it, more than the seed's 5,000 users.
 const (
 	StuckSendingAfter = 10 * time.Second
 	OverdueAfter      = 30 * time.Second
@@ -194,20 +159,18 @@ const (
 	ManyAttempts      = 3
 )
 
-// AttentionItem is a stuck or failed message, without contact data.
 type AttentionItem struct {
 	ID             string     `json:"id"`
 	Channel        string     `json:"channel"`
 	State          string     `json:"state"`
 	Attempts       int        `json:"attempts"`
-	Reason         string     `json:"reason"` // stuck_sending, not_started, overdue, many_attempts, failed, dead
+	Reason         string     `json:"reason"`
 	LastErrorClass *string    `json:"last_error_class"`
 	LastError      *string    `json:"last_error"`
 	NextAttemptAt  *time.Time `json:"next_attempt_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
-// Attention lists a campaign's messages that need a look, as of now.
 func Attention(ctx context.Context, db DB, campaignID string, now time.Time) ([]AttentionItem, error) {
 	rows, err := db.Query(ctx, `SELECT id::text, channel::text, state::text, attempts,
 			CASE

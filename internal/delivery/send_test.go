@@ -10,8 +10,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/retry"
 )
 
-// brokenBody serves status with a Content-Length longer than the body, then
-// drops the connection, so reading the body fails.
 func brokenBody(t *testing.T, status int) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,9 +26,6 @@ func brokenBody(t *testing.T, status int) string {
 	return srv.URL
 }
 
-// F7: the status is classified before the body is read. A permanent 4xx
-// with a broken body stays permanent; a 2xx with a broken body stays
-// retryable, because the provider may have sent it.
 func TestPostClassifiesStatusBeforeBody(t *testing.T) {
 	cases := []struct {
 		status int

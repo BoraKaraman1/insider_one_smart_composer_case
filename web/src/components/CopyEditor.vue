@@ -3,7 +3,6 @@ import type { Issue, IssueMap } from '../api/issues'
 import type { Draft } from '../composables/useDraft'
 import IssueList from './IssueList.vue'
 
-// The draft object is owned by useDraft; the inputs edit its fields.
 defineProps<{ draft: Draft; issues: IssueMap | null; warnings?: Issue[] | null; readonly?: boolean; busy?: boolean; dirty?: boolean }>()
 defineEmits<{ save: [] }>()
 </script>

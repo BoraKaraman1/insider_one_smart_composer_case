@@ -35,8 +35,6 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
-// Every value of a rule shows up in its description, so the reviewer sees
-// the whole rule, and the same rule always gives the same text.
 func TestDescribeCoversRandomRules(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	for range 300 {

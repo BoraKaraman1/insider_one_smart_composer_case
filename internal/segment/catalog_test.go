@@ -8,8 +8,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/schemas"
 )
 
-// TestCatalogMatchesSchema fails when the Go catalog and the JSON Schema
-// disagree, so neither can change without the other.
 func TestCatalogMatchesSchema(t *testing.T) {
 	b, err := schemas.FS.ReadFile("segment_rule.schema.json")
 	if err != nil {
@@ -74,8 +72,6 @@ func TestCatalogMatchesSchema(t *testing.T) {
 		t.Errorf("within_days maximum = %d, catalog = %d", got, WithinDaysMax)
 	}
 
-	// The condition union lists exactly one branch per (enum field, op group),
-	// plus days_since_signup and event. No branch is missing or extra.
 	wantBranches = append(wantBranches, "days_since_signup", "event")
 	var gotBranches []string
 	for _, item := range at(t, defs, "condition", "anyOf").([]any) {
@@ -98,7 +94,6 @@ func TestAccessorsReturnCopies(t *testing.T) {
 	}
 }
 
-// at walks a decoded JSON document by object keys.
 func at(t *testing.T, doc any, path ...string) any {
 	t.Helper()
 	cur := doc

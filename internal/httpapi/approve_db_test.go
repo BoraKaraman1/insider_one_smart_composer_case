@@ -16,8 +16,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// approveAPI builds the API over a seeded clone with an insert-only River
-// client, as the api process holds one. "now" is the seed anchor.
 func approveAPI(t *testing.T) (http.Handler, *pgxpool.Pool, time.Time) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -32,8 +30,6 @@ func approveAPI(t *testing.T) (http.Handler, *pgxpool.Pool, time.Time) {
 
 type eligible struct{ Total, SMS, Email int }
 
-// reviewCampaign is a campaign in review with no approval yet. Each counts
-// entry adds a revision with those audience counts; the last one is current.
 func reviewCampaign(t *testing.T, p *pgxpool.Pool, version int, counts ...eligible) (id string, revisions []string) {
 	t.Helper()
 	ctx := context.Background()
@@ -60,7 +56,6 @@ func approveBody(revision string, version int) string {
 	return fmt.Sprintf(`{"revision_id":%q,"version":%d}`, revision, version)
 }
 
-// fanoutJobs counts the fan-out jobs queued for a campaign.
 func fanoutJobs(t *testing.T, p *pgxpool.Pool, campaignID string) int {
 	t.Helper()
 	var n int
@@ -89,8 +84,6 @@ func loadApproval(t *testing.T, p *pgxpool.Pool, id string) approval {
 	return a
 }
 
-// Approve moves the campaign to approved, records who approved which
-// revision, and queues exactly one fan-out job, in one transaction.
 func TestApprove(t *testing.T) {
 	h, p, _ := approveAPI(t)
 	id, revs := reviewCampaign(t, p, 2, eligible{315, 210, 0})
@@ -115,7 +108,6 @@ func TestApprove(t *testing.T) {
 	}
 }
 
-// One channel with recipients is enough.
 func TestApproveEmailOnly(t *testing.T) {
 	h, p, _ := approveAPI(t)
 	id, revs := reviewCampaign(t, p, 0, eligible{40, 0, 12})
@@ -124,16 +116,13 @@ func TestApproveEmailOnly(t *testing.T) {
 	}
 }
 
-// The guards: a stale revision, a stale version, no consenting recipient
-// (the total ignores consent, so matches alone are not enough), and a state
-// that cannot be approved. Each gets 409 and changes nothing.
 func TestApproveGuards(t *testing.T) {
 	h, p, _ := approveAPI(t)
 	cases := []struct {
 		name   string
 		setup  func() (id, body string)
-		code   string // expected error code, "" for any 409
-		before string // state the campaign must keep
+		code   string
+		before string
 	}{
 		{"not the latest revision", func() (string, string) {
 			id, revs := reviewCampaign(t, p, 1, eligible{10, 5, 5}, eligible{10, 5, 5})
@@ -223,7 +212,6 @@ func TestApproveRequestErrors(t *testing.T) {
 	}
 }
 
-// Two reviewers approve at the same moment: one wins, one fan-out job.
 func TestConcurrentApprove(t *testing.T) {
 	h, p, _ := approveAPI(t)
 	id, revs := reviewCampaign(t, p, 0, eligible{10, 5, 5})

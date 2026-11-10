@@ -13,16 +13,7 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
 )
 
-// evalCmd runs the golden briefs and writes a report (plan 3, stream 2):
-//
-//	app eval [-cases evals/briefs.json] [-out evals/report-<mode>.md] [-runs 1] [-template app_template]
-//
-// EVAL_ADMIN_URL is an admin connection to the server that holds the
-// seeded template. The run clones the template and drops the clone; it
-// never touches the app database. LLM_MODE defaults to mock, which starts
-// an in-process mockllm and never reads the key. LLM_MODE=anthropic is for
-// the user's own terminal only (rule 1). An -out ending in .json writes
-// JSON, anything else markdown.
+// Altın brifler çalışır ve rapor yazılır, uygulama veritabanına dokunulmaz.
 func evalCmd(ctx context.Context, log *slog.Logger, getenv func(string) string, args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	casesPath := fs.String("cases", "evals/briefs.json", "golden briefs file")

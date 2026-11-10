@@ -34,8 +34,6 @@ func newCampaignID(t *testing.T, p *pgxpool.Pool) string {
 	return id
 }
 
-// The event log is what SSE replays: ordered by id, filtered by campaign,
-// and resumable from any id.
 func TestGenerationEventLog(t *testing.T) {
 	p, _ := seededPool(t)
 	ctx := context.Background()
@@ -85,8 +83,6 @@ func TestGenerationEventLog(t *testing.T) {
 	}
 }
 
-// Every insert notifies listeners with the campaign id, and only once the
-// transaction commits, so a listener never reads an event that is not there.
 func TestGenerationEventNotify(t *testing.T) {
 	p, url := seededPool(t)
 	ctx := context.Background()
@@ -133,7 +129,6 @@ func TestGenerationEventNotify(t *testing.T) {
 	}
 }
 
-// Migration 00003 adds prompt_version to llm_calls.
 func TestLLMCallsPromptVersion(t *testing.T) {
 	p, _ := seededPool(t)
 	ctx := context.Background()

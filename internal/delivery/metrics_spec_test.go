@@ -9,10 +9,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockprovider"
 )
 
-// Plan 3, 3.4: the send worker's counters. SendWorker.Metrics is an
-// optional interface that *metrics.Registry satisfies; nil is a no-op, so
-// every other send test runs without it.
-
 func metricsEnv(t *testing.T) (*sendEnv, *metrics.Registry) {
 	t.Helper()
 	e := newSendEnv(t, mockprovider.Config{})
@@ -58,8 +54,6 @@ func TestSendMetricsSuccess(t *testing.T) {
 	}
 }
 
-// Every provider call counts, retries included, and the retry counter
-// moves once per applied MarkRetry.
 func TestSendMetrics503ThenSuccess(t *testing.T) {
 	e, reg := metricsEnv(t)
 	c := insertSendingCampaign(t, e.pool)
@@ -108,8 +102,6 @@ func TestSendMetricsPermanent400(t *testing.T) {
 	})
 }
 
-// A duplicate job of a sent message counts one messages_total and makes no
-// second provider call.
 func TestSendMetricsDuplicateJob(t *testing.T) {
 	e, reg := metricsEnv(t)
 	c := insertSendingCampaign(t, e.pool)
@@ -127,8 +119,6 @@ func TestSendMetricsDuplicateJob(t *testing.T) {
 	})
 }
 
-// A late run whose guarded update did not apply counts its provider call
-// but no message outcome: another run finished the message.
 func TestSendMetricsGuardedUpdateNotApplied(t *testing.T) {
 	e, reg := metricsEnv(t)
 	c := insertSendingCampaign(t, e.pool)
@@ -150,7 +140,6 @@ func TestSendMetricsGuardedUpdateNotApplied(t *testing.T) {
 	})
 }
 
-// A skip (cancelled campaign) is an outcome too, counted once.
 func TestSendMetricsSkip(t *testing.T) {
 	e, reg := metricsEnv(t)
 	c := insertCampaignIn(t, e.pool, "cancelled", 4)
@@ -169,7 +158,6 @@ func TestSendMetricsSkip(t *testing.T) {
 	})
 }
 
-// No label carries a message, campaign or user id.
 func TestSendMetricsNoIDLabels(t *testing.T) {
 	e, reg := metricsEnv(t)
 	c := insertSendingCampaign(t, e.pool)

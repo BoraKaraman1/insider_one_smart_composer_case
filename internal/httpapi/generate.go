@@ -10,8 +10,6 @@ import (
 
 const codeUnavailable = "unavailable"
 
-// generateRoutes registers the stage A routes: start a generation, and
-// stream its events.
 func (s *Server) generateRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/campaigns/{id}/generate", s.withCampaignID(s.generate))
 	api.HandleFunc("GET /api/campaigns/{id}/events", s.withCampaignID(s.events))
@@ -22,9 +20,6 @@ type generateResponse struct {
 	EventsURL string `json:"events_url"`
 }
 
-// generate moves the campaign to generating and enqueues the job in one
-// transaction. It answers 202 with the URL of this generation's events,
-// built by eventsURL like the campaign view's, so both agree.
 func (s *Server) generate(w http.ResponseWriter, r *http.Request, id string) {
 	doc, ok := decodeBody(w, r)
 	if !ok {

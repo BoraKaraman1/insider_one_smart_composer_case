@@ -1,22 +1,4 @@
-// Command app is the single binary for every service. The first argument
-// picks the subcommand.
-//
-//	app api                        serve the HTTP API (ADMIN_TOKEN, LISTEN_ADDR)
-//	app worker                     run the River workers (LLM_MODE, see internal/llm;
-//	                               PROVIDER_URL)
-//	app migrate                    apply database migrations
-//	app seed [-users N] [-seed S] [-as-of now|RFC3339] [-reset]
-//	                               load synthetic users and events
-//	app mockllm                    serve the fake Messages API (MOCKLLM_ADDR,
-//	                               MOCKLLM_INVALID_FIRST); needs no database
-//	app mockprovider               serve the fake SMS and email provider on its own
-//	                               database (MOCKPROVIDER_DATABASE_URL, MOCKPROVIDER_*)
-//	app eval [-cases path] [-out path] [-runs N] [-template name]
-//	                               score the golden briefs (EVAL_ADMIN_URL, LLM_MODE)
-//	app healthcheck <url>          one GET, exit 0 on 200; for compose healthchecks
-//
-// api, worker, migrate, seed and eval need a database URL. healthcheck,
-// mockllm and mockprovider do not use the app database.
+// İlk argüman alt komutu seçer.
 package main
 
 import (
@@ -33,7 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+	_ "github.com/jackc/pgx/v5/stdlib" // sürücüyü kaydeder
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
@@ -45,7 +27,6 @@ import (
 )
 
 func main() {
-	// Before the signal handler: a healthcheck is one request and an exit code.
 	if len(os.Args) >= 2 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheckCmd(os.Args[2:]))
 	}
@@ -93,7 +74,7 @@ func databaseURL() (string, error) {
 func apiCmd(ctx context.Context, log *slog.Logger) error {
 	cfg, err := httpapi.ConfigFromEnv(os.Getenv)
 	if err != nil {
-		return err // fail closed: no token, no explicit opt-out, no API
+		return err // jeton yoksa uç açılmaz
 	}
 	if cfg.AdminToken == "" {
 		log.Warn("ALLOW_UNAUTHENTICATED=true: the API accepts requests without a token; local development only")
@@ -111,13 +92,12 @@ func apiCmd(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// Insert-only: the api enqueues and cancels jobs; the worker runs them.
+	// Arayüz işi kuyruğa koyar, işçi çalıştırır.
 	rc, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
 	if err != nil {
 		return err
 	}
-	// Request counters and the open-stream gauge. Database gauges are scraped
-	// from the worker, so there is one collector.
+	// İstek sayaçları burada, veritabanı göstergeleri işçide.
 	reg := metrics.New()
 	srv := &httpapi.Server{Config: cfg, Pool: pool, Schemas: schemas, Log: log, River: rc,
 		Hub: httpapi.NewHub(ctx, pool, log), Metrics: reg}

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// startServe runs serveOn with handler on a free port and returns its URL
-// and the channel serveOn's result arrives on.
 func startServe(t *testing.T, ctx context.Context, handler http.Handler) (string, <-chan error) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -21,7 +19,7 @@ func startServe(t *testing.T, ctx context.Context, handler http.Handler) (string
 	return "http://" + ln.Addr().String(), done
 }
 
-// F8: serve returns only after the active request finished.
+// Sunucu açık istek bitmeden dönmez.
 func TestServeWaitsForActiveRequests(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	ctx, stop := context.WithCancel(context.Background())
@@ -58,8 +56,7 @@ func TestServeWaitsForActiveRequests(t *testing.T) {
 	}
 }
 
-// A handler that never ends is cut after shutdownTimeout, and serve
-// returns.
+// Bitmeyen işleyici kapanma süresinden sonra kesilir.
 func TestServeClosesAfterShutdownTimeout(t *testing.T) {
 	old := shutdownTimeout
 	shutdownTimeout = 100 * time.Millisecond
@@ -69,7 +66,7 @@ func TestServeClosesAfterShutdownTimeout(t *testing.T) {
 	defer stop()
 	url, done := startServe(t, ctx, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
-		<-r.Context().Done() // ends when Close drops the connection
+		<-r.Context().Done() // bağlantı kopunca istek biter
 	}))
 	go func() {
 		if resp, err := http.Get(url); err == nil {

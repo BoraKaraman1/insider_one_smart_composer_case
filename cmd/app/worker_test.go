@@ -23,7 +23,7 @@ func env(m map[string]string) func(string) string { return func(k string) string
 
 var quiet = slog.New(slog.DiscardHandler)
 
-// The worker fails closed before it touches the database.
+// Süreç veritabanına dokunmadan kapanır.
 func TestWorkerFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	if err := workerCmd(ctx, quiet, env(map[string]string{"LLM_MODE": "anthropic", "DATABASE_URL": "postgres://unused"})); !errors.Is(err, llm.ErrNoAPIKey) {
@@ -40,8 +40,7 @@ func TestWorkerFailsClosed(t *testing.T) {
 	}
 }
 
-// MOCKLLM_INVALID_FIRST makes the demo brain's first answer invalid, so a
-// demo shows the repair loop.
+// İlk yanıtı bozan bayrak onarım döngüsünü gösterir.
 func TestMockllmInvalidFirst(t *testing.T) {
 	set, err := schema.Load()
 	if err != nil {
@@ -66,8 +65,7 @@ func TestMockllmInvalidFirst(t *testing.T) {
 	}
 }
 
-// app worker in mock mode runs a generation end to end and stops cleanly
-// when its context ends.
+// Sahte kipte üretim uçtan uca yürür ve bağlam bitince durur.
 func TestWorkerRunsGeneration(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	srv := httptest.NewServer(mockllmHandler(env(nil)))
@@ -121,8 +119,7 @@ func TestWorkerRunsGeneration(t *testing.T) {
 	}
 }
 
-// app worker runs the delivery workers too: an approved campaign is fanned
-// out and every message reaches the provider once.
+// Onaylı kampanya dağılır ve her ileti sağlayıcıya bir kez gider.
 func TestWorkerDeliversCampaign(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,7 +149,7 @@ func TestWorkerDeliversCampaign(t *testing.T) {
 	if err := p.QueryRow(ctx, `INSERT INTO campaigns (brief, campaign_url) VALUES ('b', 'https://shop.example/k') RETURNING id::text`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	// Ankara gold members: a small audience, so the run takes about a second.
+	// Ankara altın üyeleri az olduğu için koşu kısa sürer.
 	if err := p.QueryRow(ctx, `INSERT INTO campaign_revisions (campaign_id, n, source, segment, sms_body, email_subject, email_body,
 			audience_total, sms_eligible, email_eligible)
 		VALUES ($1, 1, 'llm', '{"version":1,"match":"all","conditions":[{"kind":"enum_attribute","field":"city","op":"eq","value":"ankara"},

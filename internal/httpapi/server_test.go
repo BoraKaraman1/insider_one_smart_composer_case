@@ -115,7 +115,6 @@ func TestAllowUnauthenticated(t *testing.T) {
 	if rec := do(open, "POST", "/api/audience/count", "{", nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("dev mode without token: %d, want 400 from the handler", rec.Code)
 	}
-	// A configured token is enforced even when the opt-out is also set.
 	both := handler(t, &Server{Config: Config{AdminToken: token, AllowUnauthenticated: true}})
 	if rec := do(both, "POST", "/api/audience/count", "{", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("token and opt-out: %d, want 401", rec.Code)

@@ -1,4 +1,3 @@
-// The fetch wrapper: bearer header only, typed errors, 401 callback.
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, createApi } from './client'
 

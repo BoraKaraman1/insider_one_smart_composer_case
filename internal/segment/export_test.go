@@ -5,10 +5,6 @@ import (
 	"math/rand/v2"
 )
 
-// Test helpers shared with the external oracle test (package segment_test).
-
-// RandomRule returns a valid rule with a random shape and values. Numbers and
-// windows are often on 30/90/365-day boundaries, where off-by-one bugs live.
 func RandomRule(rng *rand.Rand) Rule {
 	r := Rule{Match: []string{"all", "any"}[rng.IntN(2)]}
 	for range 1 + rng.IntN(4) {
@@ -52,7 +48,6 @@ func randomCondition(rng *rand.Rand) Condition {
 	}
 }
 
-// RuleJSON renders a rule in the rule language's JSON form.
 func RuleJSON(r Rule) []byte {
 	conds := make([]map[string]any, len(r.Conditions))
 	for i, c := range r.Conditions {

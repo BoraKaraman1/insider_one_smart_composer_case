@@ -35,8 +35,6 @@ func jobState(t *testing.T, p *pgxpool.Pool, campaignID string) []string {
 	return out
 }
 
-// A cancel before the worker picks the job up cancels the queued job
-// through River, and leaves other campaigns' jobs alone.
 func TestCancelCancelsQueuedGenerateJob(t *testing.T) {
 	p, _ := genPool(t)
 	ctx := context.Background()
@@ -70,7 +68,6 @@ func TestCancelCancelsQueuedGenerateJob(t *testing.T) {
 	if last := events[len(events)-1]; last.Type != "failed" || last.Payload["reason"] != ReasonCancelled {
 		t.Errorf("last event %+v, want failed with reason cancelled", last)
 	}
-	// Plain Cancel needs no River client and cancels no job.
 	if err := Cancel(ctx, p, other, 1, "admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +76,6 @@ func TestCancelCancelsQueuedGenerateJob(t *testing.T) {
 	}
 }
 
-// A cancel during a running generation reaches the job's context through
-// River's JobCancel. The model call stalls far longer than the test waits,
-// so only the cancel can stop it in time.
 func TestCancelStopsRunningGenerateJob(t *testing.T) {
 	p, meta := genPool(t)
 	ctx := context.Background()

@@ -1,12 +1,3 @@
-// Follows one generation's event stream (plan 1.2). The events URL always
-// comes from the 202 of generate or from the campaign view; this file never
-// builds one.
-//
-// A dropped connection is reopened at the same URL with Last-Event-ID, with
-// a backoff of 0.5 s doubling to 8 s. A stream that ends without done or
-// failed is reconciled from the campaign view: still generating means
-// reconnect, anything else means render the view and flag endedEarly.
-
 import { getCurrentScope, onScopeDispose, ref } from 'vue'
 import { ApiError } from '../api/client'
 import { openEventStream } from '../api/sse'
@@ -48,7 +39,6 @@ export function useGeneration(opts: GenerationOptions) {
     })
   }
 
-  // fatal reports a 4xx: retrying cannot help.
   function fatal(e: unknown): boolean {
     if (!(e instanceof ApiError) || e.status < 400 || e.status >= 500) return false
     if (e.status === 401) opts.onUnauthorized?.()
@@ -56,8 +46,6 @@ export function useGeneration(opts: GenerationOptions) {
     return true
   }
 
-  // loadView reloads the campaign view, retrying with backoff. It returns
-  // null when aborted or on a 4xx.
   async function loadView(campaignId: string, signal: AbortSignal): Promise<CampaignView | null> {
     for (let delay = minDelay; !signal.aborted; delay = Math.min(delay * 2, maxDelay)) {
       try {
@@ -75,8 +63,6 @@ export function useGeneration(opts: GenerationOptions) {
     return null
   }
 
-  // follow resets the reducer, aborts any earlier stream, and resolves once
-  // the generation is terminal, reconciled, or the stream was aborted.
   async function follow(campaignId: string, eventsUrl: string): Promise<void> {
     stop()
     const mine = new AbortController()
@@ -100,7 +86,7 @@ export function useGeneration(opts: GenerationOptions) {
             try {
               data = JSON.parse(m.data)
             } catch {
-              // a frame that is not JSON carries nothing the reducer uses
+              // JSON değilse veri yok sayılır.
             }
             state.value = reduce(state.value, { id: Number(m.id), event: m.event, data })
           },
@@ -113,12 +99,11 @@ export function useGeneration(opts: GenerationOptions) {
       }
       const phase = state.value.phase
       if (phase === 'done' || phase === 'failed') {
-        // The stored revision replaces the provisional copy.
         await loadView(campaignId, signal)
         return
       }
       if (error.value === null) {
-        // Ended without done or failed: the view decides.
+        // Bitiş olayı yoksa kararı kayıt verir.
         const v = await loadView(campaignId, signal)
         if (!v) return
         if (v.campaign.state !== 'generating') {

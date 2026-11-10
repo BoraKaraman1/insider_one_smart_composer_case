@@ -7,13 +7,9 @@ import (
 	"time"
 )
 
-// healthcheckTimeout bounds the one request of "app healthcheck".
 const healthcheckTimeout = 2 * time.Second
 
-// healthcheckCmd is "app healthcheck <url>" for compose healthchecks: the
-// image is distroless, with no shell or curl. One GET; exit 0 on 200, 1 on
-// anything else (another status, a redirect, an error, the timeout), 2 on
-// a usage error.
+// Kabuksuz imajda sağlık kontrolü bu komutla yapılır.
 func healthcheckCmd(args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: app healthcheck <url>")
@@ -21,7 +17,7 @@ func healthcheckCmd(args []string) int {
 	}
 	c := &http.Client{
 		Timeout: healthcheckTimeout,
-		// A redirect is not healthy: the answer must be the 200 itself.
+		// Yönlendirme sağlıklı sayılmaz.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := c.Get(args[0])

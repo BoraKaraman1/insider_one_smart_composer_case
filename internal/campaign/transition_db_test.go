@@ -23,9 +23,6 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return p
 }
 
-// insertCampaign creates a campaign in the given state and version. It has a
-// revision and a full approval in every state, so the table's CHECKs accept
-// any state and the test exercises only the state machine.
 func insertCampaign(t *testing.T, p *pgxpool.Pool, state State, version int) string {
 	t.Helper()
 	ctx := context.Background()
@@ -79,7 +76,6 @@ func load(t *testing.T, p *pgxpool.Pool, id string) row {
 	return r
 }
 
-// move runs one transition in its own transaction and commits on success.
 func move(p *pgxpool.Pool, m Move) error {
 	ctx := context.Background()
 	tx, err := p.Begin(ctx)
@@ -93,9 +89,6 @@ func move(p *pgxpool.Pool, m Move) error {
 	return tx.Commit(ctx)
 }
 
-// TestTransitionMatrixAgainstDatabase runs all 100 pairs through the guarded
-// update. An allowed pair moves the row, bumps the version and writes one
-// audit row. A pair outside the table changes nothing.
 func TestTransitionMatrixAgainstDatabase(t *testing.T) {
 	p := testPool(t)
 	for _, from := range States() {
@@ -145,14 +138,12 @@ func TestTransitionConflicts(t *testing.T) {
 			t.Errorf("%s: a lost update changed the row: %+v", c.name, got)
 		}
 	}
-	// A campaign that does not exist matches zero rows too.
 	err := move(p, Move{ID: "00000000-0000-4000-8000-00000000dead", From: InReview, To: Rejected, Version: 0, Actor: "marketer"})
 	if !errors.Is(err, ErrConflict) {
 		t.Errorf("unknown campaign: error %v, want ErrConflict", err)
 	}
 }
 
-// Two people act on the same review screen at once. Exactly one wins.
 func TestConcurrentTransitionsOneWins(t *testing.T) {
 	p := testPool(t)
 	id := insertCampaign(t, p, InReview, 2)
@@ -189,8 +180,6 @@ func TestConcurrentTransitionsOneWins(t *testing.T) {
 	}
 }
 
-// The transition and its audit row belong to the caller's transaction, so
-// approve and cancel can add their own writes atomically.
 func TestTransitionRollsBackWithCaller(t *testing.T) {
 	p := testPool(t)
 	ctx := context.Background()

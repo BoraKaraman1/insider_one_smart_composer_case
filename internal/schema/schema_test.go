@@ -225,8 +225,6 @@ func TestForAPI(t *testing.T) {
 				}
 			}
 		})
-		// The derived schema is looser, never stricter: everything valid
-		// against the full schema must be valid against it.
 		derived := compileDoc(t, api)
 		for _, c := range valid {
 			if err := derived.Validate(decode(t, c.json)); err != nil {
@@ -235,8 +233,6 @@ func TestForAPI(t *testing.T) {
 		}
 	}
 
-	// The gap local validation covers: a 161-rune SMS passes the API schema
-	// and fails the full one.
 	api, _ := s.ForAPI(Content)
 	long := decode(t, content(strings.Repeat("a", 161), "s", "b"))
 	if err := compileDoc(t, api).Validate(long); err != nil {
@@ -246,7 +242,6 @@ func TestForAPI(t *testing.T) {
 		t.Error("full schema accepted a 161-rune SMS")
 	}
 
-	// Revision references other files, which the API cannot resolve.
 	if _, err := s.ForAPI(Revision); err == nil {
 		t.Error("ForAPI(Revision) accepted an external $ref")
 	}

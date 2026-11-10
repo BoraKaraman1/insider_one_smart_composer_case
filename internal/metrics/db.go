@@ -10,19 +10,13 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// scrapeTimeout bounds the database queries of one scrape.
 const scrapeTimeout = 2 * time.Second
 
-// channels and queues are the closed sets the gauges always expose, at 0
-// when the database has no row for them.
 var (
 	channels = []string{"sms", "email"}
 	queues   = []string{jobs.QueueGenerate, jobs.QueueFanout, jobs.QueueSMS, jobs.QueueEmail}
 )
 
-// WatchDatabase registers the scrape-time gauges: messages, queue_jobs and
-// queue_oldest_job_age_seconds. They read db on every scrape, under one
-// 2 s timeout.
 func (r *Registry) WatchDatabase(db store.DB) {
 	c := &dbCollector{db: db, descs: map[string]*prometheus.Desc{}}
 	for _, e := range catalog {
@@ -44,8 +38,7 @@ func (c *dbCollector) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
-// Collect reads the queue first: under a slow messages table the queue
-// gauges, the ones to alert on, still make it.
+// Kuyruk önce okunur, mesaj tablosu yavaşsa da o göstergeler yetişir.
 func (c *dbCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), scrapeTimeout)
 	defer cancel()

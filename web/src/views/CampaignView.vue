@@ -14,7 +14,6 @@ import { useDraft } from '../composables/useDraft'
 import { useGeneration } from '../composables/useGeneration'
 import { api, clearToken, token } from '../session'
 
-// App keys the route view by path, so one instance serves one campaign.
 const props = defineProps<{ id: string }>()
 const c = useCampaign(toRef(props, 'id'), api)
 const d = useDraft()
@@ -24,8 +23,6 @@ const g = useGeneration({
   onUnauthorized: clearToken,
 })
 
-// Every view that arrives goes to the draft: start() fills an empty draft,
-// observe() only records it.
 watch(c.view, (v) => {
   if (!v) return
   if (d.draft.value === null) d.start(v)
@@ -38,8 +35,6 @@ const streamed = computed(() => g.state.value.segment as SegmentReady | null)
 const delivery = computed(() => campaign.value?.approved_revision_id != null)
 const editable = computed(() => campaign.value?.state === 'in_review')
 
-// replaceDraft is set by Regenerate: the user chose to drop the draft, so
-// the new revision becomes the draft once the generation is over.
 let replaceDraft = false
 
 async function followGeneration(eventsUrl: string) {

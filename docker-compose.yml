@@ -1,17 +1,5 @@
 name: smart-campaign-composer
 
-# docker compose up: Postgres, then migrate, then seed (anchored at now, a
-# no-op if data exists), then the api on http://127.0.0.1:8080, the worker
-# (metrics on http://127.0.0.1:9090), the web UI on http://127.0.0.1:8081,
-# the mock LLM and the mock provider (stats on http://127.0.0.1:8091).
-#
-# LLM_MODE defaults to mock, so the stack runs without a key. Only the
-# worker calls Claude and the provider, so only the worker reads the
-# optional .env (for ANTHROPIC_API_KEY when LLM_MODE=anthropic). With
-# LLM_MODE=anthropic and no key, the worker refuses to start.
-# The api needs ADMIN_TOKEN; the default below is a dev token, shown in the
-# README. Compose never starts the api unauthenticated.
-
 x-app: &app
   build: .
   image: smart-campaign-composer:local
@@ -23,11 +11,11 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: app
-      POSTGRES_PASSWORD: app # local dev database only
+      POSTGRES_PASSWORD: app
       POSTGRES_DB: app
     volumes:
       - pgdata:/var/lib/postgresql
-      # Creates the mock provider's own role and database on a new volume.
+      # Yeni diskte sahte sağlayıcının kendi veritabanı kurulur.
       - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
@@ -56,7 +44,6 @@ services:
       DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
       LISTEN_ADDR: ":8080"
-      # Hosts a campaign_url may point at; without one no campaign can be created.
       CAMPAIGN_URL_HOSTS: ${CAMPAIGN_URL_HOSTS:-shop.example}
     ports:
       - "127.0.0.1:8080:8080"
@@ -70,8 +57,7 @@ services:
       retries: 12
       start_period: 10s
 
-  # Runs the generate, fan-out and send jobs. The only container that may
-  # get the API key.
+  # Anahtarı okuyabilen tek servis.
   worker:
     <<: *app
     command: ["worker"]
@@ -101,13 +87,12 @@ services:
       retries: 12
       start_period: 10s
 
-  # Fake Messages API for LLM_MODE=mock. No database, no key.
   mockllm:
     <<: *app
     command: ["mockllm"]
     environment:
       MOCKLLM_ADDR: ":8090"
-      # true: the first answer of each stage is invalid, to show the repair loop.
+      # Açıkken her aşamanın ilk cevabı bozuk gelir.
       MOCKLLM_INVALID_FIRST: ${MOCKLLM_INVALID_FIRST:-false}
     healthcheck:
       test: ["CMD", "/app", "healthcheck", "http://127.0.0.1:8090/healthz"]
@@ -116,8 +101,7 @@ services:
       retries: 12
       start_period: 5s
 
-  # Fake SMS and email provider with fault injection, on its own database
-  # and role. Rates are shares of requests; see internal/mockprovider.
+  # Oranlar istek payı. Kendi veritabanında durur.
   mockprovider:
     <<: *app
     command: ["mockprovider"]
@@ -135,7 +119,7 @@ services:
       MOCKPROVIDER_RATE_DROP: ${MOCKPROVIDER_RATE_DROP:-0.03}
       MOCKPROVIDER_RATE_LATE: ${MOCKPROVIDER_RATE_LATE:-0}
     ports:
-      - "127.0.0.1:8091:8091" # GET /v1/stats
+      - "127.0.0.1:8091:8091"
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,8 +130,6 @@ services:
       retries: 12
       start_period: 10s
 
-  # The marketer UI. Same origin as the API: nginx proxies /api, /healthz
-  # and /readyz. Busybox wget, because this image is not the distroless app.
   web:
     build: ./web
     image: smart-campaign-composer-web:local
@@ -163,12 +145,12 @@ services:
       retries: 12
       start_period: 5s
 
-  # Throwaway server for make test: in memory, removed after the run.
+  # Test bitince giden bellek içi sunucu.
   postgres-test:
     image: postgres:18-alpine
     profiles: ["test"]
     environment:
-      POSTGRES_PASSWORD: test # throwaway test server only
+      POSTGRES_PASSWORD: test
     tmpfs:
       - /var/lib/postgresql
     ports:

@@ -42,9 +42,6 @@ func serve(t *testing.T, o mockllm.Options) (*mockllm.Server, *httptest.Server) 
 	return m, srv
 }
 
-// body builds a request the way internal/llm sends it: the API-derived
-// schema of the stage, adaptive thinking, explicit effort, no sampling
-// parameters.
 func body(t *testing.T, stage mockllm.Stage, stream bool, userTurns ...string) map[string]any {
 	t.Helper()
 	name, effort := schema.SegmentRule, "low"
@@ -77,7 +74,6 @@ func body(t *testing.T, stage mockllm.Stage, stream bool, userTurns ...string) m
 	})
 }
 
-// roundTrip turns any JSON value into plain maps, so tests can mutate it.
 func roundTrip(t *testing.T, v any) map[string]any {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -143,7 +139,6 @@ func readSSE(t *testing.T, r io.Reader) []sse {
 	return out
 }
 
-// text concatenates the text deltas of a stream.
 func text(events []sse) (string, int) {
 	var sb strings.Builder
 	n := 0
@@ -176,7 +171,6 @@ func apiErrorType(t *testing.T, resp *http.Response) string {
 	return e.Error.Type
 }
 
-// at walks into a decoded body by keys.
 func at(m map[string]any, keys ...string) map[string]any {
 	for _, k := range keys {
 		m, _ = m[k].(map[string]any)
@@ -184,8 +178,6 @@ func at(m map[string]any, keys ...string) map[string]any {
 	return m
 }
 
-// TestRejectsWhatTheAPIRejects makes drift in our requests fail in tests,
-// not in production: each case is a shape the real API answers with a 400.
 func TestRejectsWhatTheAPIRejects(t *testing.T) {
 	_, srv := serve(t, mockllm.Options{})
 	contentSchema := func(b map[string]any) map[string]any { return at(b, "output_config", "format", "schema") }
@@ -238,7 +230,6 @@ func TestRejectsWhatTheAPIRejects(t *testing.T) {
 		}
 	}
 
-	// What internal/llm sends must pass, for both stages.
 	for _, stage := range []mockllm.Stage{mockllm.Segment, mockllm.Content} {
 		if resp := post(t, srv, body(t, stage, true, "<brief>"+turkishBrief+"</brief>"), apiHeaders); resp.StatusCode != 200 {
 			t.Errorf("valid %s request: status %d", stage, resp.StatusCode)
@@ -261,8 +252,6 @@ func brainAnswer(t *testing.T, srv *httptest.Server, stage mockllm.Stage, userTu
 	return got
 }
 
-// The demo brain turns the spec's brief into the documented rule, so
-// docker compose up shows the real flow without a key.
 func TestDemoBrain(t *testing.T) {
 	set := schemas(t)
 	example, err := os.ReadFile("../../docs/examples/istanbul_cart_abandoners.json")
@@ -313,9 +302,6 @@ func TestDemoBrain(t *testing.T) {
 	}
 }
 
-// The mock is used through the real SDK in internal/llm. This checks the SDK
-// accumulates a mock stream into a full message and maps a mock error to its
-// typed error.
 func TestThroughRealSDK(t *testing.T) {
 	m, srv := serve(t, mockllm.Options{})
 	answer := `{"sms":{"body":"Merhaba {{first_name}} {{campaign_url}}"},"email":{"subject":"Sepet","body":"Selam"}}`

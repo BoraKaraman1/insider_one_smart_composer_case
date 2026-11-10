@@ -1,15 +1,3 @@
-// Plan 3, 1.7: SSE through nginx, against the compose stack on :8081 in
-// mock mode (make e2e). Uses the app's own src/api/sse.ts in Node.
-//
-// Env: WEB_URL (default http://127.0.0.1:8081), E2E_TOKEN (default the
-// compose dev token). No API key: the stack runs LLM_MODE=mock.
-//
-// Contract assumed besides sse.ts (src/composables/useGeneration.ts):
-//   useGeneration(opts: { baseUrl: string; token: string; fetch?: typeof fetch;
-//                         getCampaign(id, signal): Promise<CampaignView> }): {
-//     state: Ref<GenState>; view: Ref<CampaignView | null>; endedEarly: Ref<boolean>;
-//     follow(campaignId: string, eventsUrl: string): Promise<void>  resolves once terminal or reconciled
-//   }
 import { describe, expect, it } from 'vitest'
 import { effectScope } from 'vue'
 import { openEventStream, type SSEMessage } from '../src/api/sse'
@@ -75,8 +63,7 @@ async function untilState(id: string, states: string[], within = 30_000) {
   }
 }
 
-// An idle stream: after the last event of a finished generation, so the
-// server waits for live events and sends only heartbeats.
+// Biten akıştan sonra sunucu yalnız nabız yollar.
 async function idleStreamURL(): Promise<{ id: string; url: string }> {
   const id = await createCampaign()
   const first = await collect(await generate(id))
@@ -87,9 +74,6 @@ async function idleStreamURL(): Promise<{ id: string; url: string }> {
 }
 
 describe('SSE through nginx', () => {
-  // 1. The proxy does not buffer: a heartbeat comment, a few bytes long,
-  // reaches the client while the stream is idle, and live events arrive on
-  // the open stream in order.
   it('delivers heartbeats and live events without buffering', async () => {
     const { id, url } = await idleStreamURL()
     const ctl = new AbortController()
@@ -116,8 +100,6 @@ describe('SSE through nginx', () => {
     expect(events.some((e) => e.event === 'delta')).toBe(true)
   }, 60_000)
 
-  // 2. Mid-run of a second generation, the campaign view's events_url never
-  // yields the first generation's terminal event.
   it('the view cursor skips the first generation', async () => {
     const id = await createCampaign()
     const first = await collect(await generate(id))
@@ -132,8 +114,6 @@ describe('SSE through nginx', () => {
     expect(second.seen.at(-1)!.m.event).toBe('done')
   }, 60_000)
 
-  // 3. Drop the connection mid-stream and reconnect with Last-Event-ID:
-  // every remaining event arrives exactly once.
   it('resumes with Last-Event-ID without loss or duplicates', async () => {
     const id = await createCampaign()
     const url = await generate(id)
@@ -151,8 +131,6 @@ describe('SSE through nginx', () => {
     expect(rest.seen.at(-1)!.m.event).toBe('done')
   }, 60_000)
 
-  // 4. A heartbeat keeps an idle stream open past nginx's default 60 s read
-  // timeout (the config sets 1 h; heartbeats make the margin irrelevant).
   it('keeps an idle stream open past the proxy default timeout', async () => {
     const { id, url } = await idleStreamURL()
     const events: SSEMessage[] = []
@@ -172,14 +150,11 @@ describe('SSE through nginx', () => {
     expect(events[0].event).toBe('started')
   }, 120_000)
 
-  // 5. A stream cut before its terminal event: the client reloads the
-  // campaign view and reconciles, either by reconnecting (still generating)
-  // or by rendering the stored revision with an early-end notice.
   it('reconciles from the campaign view when the stream is cut', async () => {
     const id = await createCampaign()
     const url = await generate(id)
     let connections = 0
-    // The first connection is cut after its first frame, as a proxy reset would.
+    // İlk bağlantı ilk kareden sonra kesilir.
     const cutting: typeof fetch = async (input, init) => {
       const res = await fetch(input, init)
       if (!String(input).includes('/events') || connections++ > 0 || !res.body) return res
@@ -220,7 +195,7 @@ describe('SSE through nginx', () => {
     if (g.endedEarly.value) {
       expect(g.view.value?.revision?.id).toBe(view.revision.id)
     } else {
-      expect(connections).toBeGreaterThanOrEqual(2) // it reconnected
+      expect(connections).toBeGreaterThanOrEqual(2)
       expect(g.state.value.phase).toBe('done')
       expect(g.state.value.fields['sms.body']).toBe(view.revision.sms_body)
       expect(g.state.value.fields['email.subject']).toBe(view.revision.email_subject)

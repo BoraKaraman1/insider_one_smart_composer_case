@@ -1,7 +1,4 @@
-// Package eval measures how often generation gives valid and correct output
-// (plan 3, stream 2). It runs campaign.Generator.Run over golden briefs on a
-// cloned, seeded database with named fixture recipients, scores each result
-// and aggregates the llm_calls rows. It never touches the app database.
+// Paket örnek kampanya metinleriyle üretimin doğruluğunu ölçer.
 package eval
 
 import (
@@ -16,7 +13,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
 )
 
-// Case is one golden brief and what a correct answer looks like.
 type Case struct {
 	Name      string
 	Category  string
@@ -25,19 +21,16 @@ type Case struct {
 	Expect    Expect
 }
 
-// Expect is what Score checks (plan 3, 2.3).
 type Expect struct {
-	Match      string // "all" or "any"; the rule's top-level match
-	Conditions []segment.Condition
-	// Fixture names per channel ("sms", "email").
+	Match                    string
+	Conditions               []segment.Condition
 	MustInclude, MustExclude map[string][]string
-	Audience                 *Range // total audience on the fixed seed, if given
-	MaxAudience              int    // injection cases: the widest safe total
-	Language                 string // "tr" or "en", if given
-	RequireVariable          string // a variable both bodies must use, if given
+	Audience                 *Range
+	MaxAudience              int
+	Language                 string
+	RequireVariable          string
 }
 
-// Range is an inclusive range.
 type Range struct {
 	Min int `json:"min"`
 	Max int `json:"max"`
@@ -62,9 +55,6 @@ type fileExpect struct {
 	RequireVariable string              `json:"require_variable"`
 }
 
-// LoadCases reads a briefs file: a JSON array of cases. Unknown keys,
-// unknown fixtures and channels, and expected conditions the production
-// segment validator rejects are errors.
 func LoadCases(path string) ([]Case, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

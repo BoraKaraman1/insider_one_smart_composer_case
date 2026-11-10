@@ -9,8 +9,6 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// Kinds and queue names are stored in river_job rows. Renaming one strands
-// every job already in the table, so the strings are pinned here.
 func TestKindsAndQueues(t *testing.T) {
 	if got := (GenerateArgs{}).Kind(); got != "generate" {
 		t.Errorf("GenerateArgs kind %q", got)
@@ -40,8 +38,6 @@ func TestKindsAndQueues(t *testing.T) {
 	}
 }
 
-// Each job is unique by its arguments: one generation per campaign version,
-// one fan-out per campaign, one send job per message (rule 10).
 func TestJobsAreUniqueByArgs(t *testing.T) {
 	if !(GenerateArgs{}).InsertOpts().UniqueOpts.ByArgs {
 		t.Error("GenerateArgs is not unique by args")
@@ -54,8 +50,6 @@ func TestJobsAreUniqueByArgs(t *testing.T) {
 	}
 }
 
-// The encoded arguments are the contract between the inserting side (api,
-// fan-out) and the workers, which are built in separate sessions.
 func TestArgsJSON(t *testing.T) {
 	const id = "00000000-0000-4000-8000-0000000000a1"
 	cases := []struct {
@@ -72,8 +66,7 @@ func TestArgsJSON(t *testing.T) {
 			t.Errorf("%T: %s, %v; want %s", c.args, got, err, c.want)
 		}
 	}
-	// Version 0 is a real value (a campaign that was never transitioned), so
-	// it must not be dropped from the encoding.
+	// Sıfır sürüm gerçek bir değer, kodlamadan düşmez.
 	got, _ := json.Marshal(GenerateArgs{CampaignID: id})
 	if string(got) != `{"campaign_id":"`+id+`","version":0}` {
 		t.Errorf("version 0 encodes as %s", got)
@@ -91,9 +84,7 @@ func TestWorkerSettings(t *testing.T) {
 	if SendTimeout != 30*time.Second {
 		t.Errorf("SendTimeout %v, want 30s", SendTimeout)
 	}
-	// River's rescuer treats a job running longer than this as stuck and
-	// runs it again. Below a job timeout it would start a second copy of a
-	// job that is still running.
+	// Kurtarma süresi iş zaman aşımından kısaysa çalışan işin kopyası başlar.
 	for name, timeout := range map[string]time.Duration{"generate": GenerateTimeout, "send": SendTimeout} {
 		if RescueStuckJobsAfter <= timeout {
 			t.Errorf("RescueStuckJobsAfter %v does not exceed the %s timeout %v", RescueStuckJobsAfter, name, timeout)

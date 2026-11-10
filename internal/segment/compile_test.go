@@ -111,7 +111,6 @@ func TestAudienceQueryAlwaysFiltersConsent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The rule is parenthesized, so OR inside it cannot escape the consent filter.
 		if want := "SELECT u.id FROM users u WHERE (u.city = $1) AND " + col; q.SQL != want {
 			t.Errorf("%s:\n got %s\nwant %s", channel, q.SQL, want)
 		}
@@ -121,8 +120,6 @@ func TestAudienceQueryAlwaysFiltersConsent(t *testing.T) {
 	}
 }
 
-// TestRandomRulesAreValid: the generator only makes rules the validator
-// accepts, and validation returns exactly the rule that went in.
 func TestRandomRulesAreValid(t *testing.T) {
 	set := mustSet(t)
 	rng := rand.New(rand.NewPCG(1, 2))
@@ -138,8 +135,6 @@ func TestRandomRulesAreValid(t *testing.T) {
 	}
 }
 
-// withNewValues keeps a rule's shape (kinds, fields, ops, negation, condition
-// count) and draws new values, including lists of a different length.
 func withNewValues(rng *rand.Rand, r Rule) Rule {
 	out := Rule{Match: r.Match}
 	for _, c := range r.Conditions {
@@ -161,7 +156,6 @@ func withNewValues(rng *rand.Rand, r Rule) Rule {
 	return out
 }
 
-// mustAppear lists values a condition must contribute to the arguments.
 func mustAppear(c Condition) []any {
 	switch c.Kind {
 	case KindEnum:
@@ -170,7 +164,7 @@ func mustAppear(c Condition) []any {
 		}
 		return []any{c.Value}
 	case KindNumber:
-		return nil // checked through the cutoffs below
+		return nil
 	default:
 		return []any{c.Event, asOf.Add(-time.Duration(c.WithinDays) * day)}
 	}
@@ -180,7 +174,6 @@ var placeholder = regexp.MustCompile(`\$(\d+)`)
 
 func checkArgs(t *testing.T, f fragment, r Rule) {
 	t.Helper()
-	// Placeholders are exactly $1..$len(args).
 	seen := map[int]bool{}
 	for _, m := range placeholder.FindAllStringSubmatch(f.sql, -1) {
 		n, _ := strconv.Atoi(m[1])
@@ -216,9 +209,6 @@ func containsArg(args []any, v any) bool {
 	return false
 }
 
-// TestShapeProperty is what rule 2 claims: the SQL text depends only on the
-// rule's shape. Same shape, different values, byte-identical SQL, and every
-// value is in the arguments.
 func TestShapeProperty(t *testing.T) {
 	rng := rand.New(rand.NewPCG(3, 4))
 	for range 2000 {
@@ -233,9 +223,6 @@ func TestShapeProperty(t *testing.T) {
 	}
 }
 
-// FuzzCompileShape feeds arbitrary strings, unvalidated on purpose, into
-// every value slot. Even values that never pass validation (quotes, SQL,
-// NUL bytes) cannot change the SQL text.
 func FuzzCompileShape(f *testing.F) {
 	for _, s := range []string{"istanbul", "x'; DROP TABLE users;--", "$1", "a", "in", "", "\x00", "' OR '1'='1"} {
 		f.Add(s, "ankara")

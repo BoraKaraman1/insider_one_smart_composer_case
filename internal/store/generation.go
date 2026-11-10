@@ -9,11 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// GenerationEventsChannel is the LISTEN channel of the event log. The
-// payload is the campaign id.
 const GenerationEventsChannel = "generation_events"
 
-// GenerationEvent is a generation_events row.
 type GenerationEvent struct {
 	ID         int64           `json:"id"`
 	CampaignID string          `json:"campaign_id"`
@@ -22,9 +19,6 @@ type GenerationEvent struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// InsertGenerationEvent appends an event and notifies listeners. Postgres
-// delivers the notification only when the transaction commits, so pass a
-// transaction to make the event part of a larger change.
 func InsertGenerationEvent(ctx context.Context, db DB, campaignID, typ string, payload any) (int64, error) {
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -35,12 +29,11 @@ func InsertGenerationEvent(ctx context.Context, db DB, campaignID, typ string, p
 		campaignID, typ, string(b)).Scan(&id); err != nil {
 		return 0, err
 	}
+	// Bildirim ancak işlem onaylanınca görünür.
 	_, err = db.Exec(ctx, `SELECT pg_notify($1, $2)`, GenerationEventsChannel, campaignID)
 	return id, err
 }
 
-// ListGenerationEvents returns a campaign's events with an id above after,
-// oldest first.
 func ListGenerationEvents(ctx context.Context, db DB, campaignID string, after int64) ([]GenerationEvent, error) {
 	rows, err := db.Query(ctx, `SELECT id, campaign_id::text, type, payload, created_at FROM generation_events
 		WHERE campaign_id = $1 AND id > $2 ORDER BY id`, campaignID, after)
@@ -54,8 +47,6 @@ func ListGenerationEvents(ctx context.Context, db DB, campaignID string, after i
 	})
 }
 
-// LatestStartedEventID returns the id of a campaign's newest started event.
-// ok is false when the campaign never had a generation.
 func LatestStartedEventID(ctx context.Context, db DB, campaignID string) (int64, bool, error) {
 	var n *int64
 	err := db.QueryRow(ctx, `SELECT max(id) FROM generation_events WHERE campaign_id = $1 AND type = 'started'`,
@@ -66,10 +57,7 @@ func LatestStartedEventID(ctx context.Context, db DB, campaignID string) (int64,
 	return *n, true, nil
 }
 
-// LockGenerating locks a campaign row against transitions for the rest of
-// the transaction, if the campaign is still generating at version. A
-// generation job writes nothing unless this holds, so a cancel or a newer
-// generation always wins.
+// Kilit tutmazsa üretim hiçbir şey yazmaz ki iptal her zaman kazansın.
 func LockGenerating(ctx context.Context, db DB, id string, version int) (bool, error) {
 	var one int
 	err := db.QueryRow(ctx, `SELECT 1 FROM campaigns WHERE id = $1 AND state = 'generating' AND version = $2 FOR SHARE`,
@@ -80,24 +68,22 @@ func LockGenerating(ctx context.Context, db DB, id string, version int) (bool, e
 	return err == nil, err
 }
 
-// LLMCall is one llm_calls row to insert.
 type LLMCall struct {
 	CampaignID       string
 	Stage            string
 	Attempt          int
-	Outcome          string // valid, invalid, refusal, max_tokens, transport_error
-	ErrorClass       string // empty unless transport_error
+	Outcome          string
+	ErrorClass       string
 	StopReason       string
 	Model            string
 	InputTokens      *int
 	OutputTokens     *int
 	LatencyMS        int
 	RawOutput        string
-	ValidationErrors any // a JSON array
+	ValidationErrors any
 	PromptVersion    string
 }
 
-// InsertLLMCall records one call to the model.
 func InsertLLMCall(ctx context.Context, db DB, c LLMCall) error {
 	errs, err := json.Marshal(c.ValidationErrors)
 	if err != nil {
@@ -114,8 +100,6 @@ func InsertLLMCall(ctx context.Context, db DB, c LLMCall) error {
 	return err
 }
 
-// UnfinishedJobs returns the ids of a campaign's River jobs of one kind
-// that may still run: queued, scheduled, retryable or running.
 func UnfinishedJobs(ctx context.Context, db DB, kind, campaignID string) ([]int64, error) {
 	rows, err := db.Query(ctx, `SELECT id FROM river_job WHERE kind = $1 AND args->>'campaign_id' = $2
 		AND state NOT IN ('completed', 'cancelled', 'discarded') ORDER BY id`, kind, campaignID)

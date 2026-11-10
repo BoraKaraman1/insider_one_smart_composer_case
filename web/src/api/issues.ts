@@ -1,8 +1,3 @@
-// Issue paths of a 422 on POST /revisions carry the /revision prefix. Each
-// known path goes to its field. Anything else goes to the form-level list,
-// so no error is ever dropped.
-
-// validation.Issue
 export interface Issue {
   path: string
   code: string

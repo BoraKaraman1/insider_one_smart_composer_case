@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-// WriteReport writes the report to path: JSON when path ends in .json,
-// markdown otherwise.
 func WriteReport(path string, rep Report) error {
 	var data []byte
 	if strings.EqualFold(filepath.Ext(path), ".json") {
@@ -29,8 +27,6 @@ func WriteReport(path string, rep Report) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// Markdown renders the report. The header names the mode, model and prompt
-// versions, so mock and anthropic numbers are never mixed up.
 func (r Report) Markdown() string {
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }

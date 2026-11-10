@@ -14,16 +14,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// Plan 3, stream 3. Contract assumed by these tests:
-//
-//	New() *Registry                 a private prometheus.Registry inside
-//	(*Registry).Handler() http.Handler   the /metrics handler, no auth
-//	(*Registry).WatchDatabase(db)   registers the scrape-time gauges
-//	Catalog() []Series              the one table New registers from
-//	Series{Name, Kind string; Labels []string}
-
-// golden is section 3.1 of the plan. A change here is a change to the
-// dashboards and alerts, so it must be deliberate.
 var golden = []Series{
 	{"generation_duration_seconds", "histogram", []string{"outcome"}},
 	{"http_requests_total", "counter", []string{"route", "status"}},
@@ -77,7 +67,6 @@ func TestCatalogIsGolden(t *testing.T) {
 	}
 }
 
-// Nothing but catalog series (and the histogram suffixes) is exposed.
 func TestHandlerExposesOnlyCatalog(t *testing.T) {
 	r := New()
 	known := map[string]bool{}
@@ -96,7 +85,6 @@ func TestHandlerExposesOnlyCatalog(t *testing.T) {
 	}
 }
 
-// Database gauges are read at scrape time and cover every campaign.
 func TestDatabaseGaugesMatchRows(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	ctx := context.Background()
@@ -139,7 +127,6 @@ func TestDatabaseGaugesMatchRows(t *testing.T) {
 		}
 	}
 
-	// Two available jobs on the sms queue, the older one 120 s old.
 	for i := range 2 {
 		if _, err := p.Exec(ctx, `INSERT INTO river_job (kind, queue, state, args, max_attempts, priority, created_at, scheduled_at)
 			VALUES ('send', 'sms', 'available', '{}', 25, 1, now() - make_interval(secs => $1), now())`, 120-i*60); err != nil {
@@ -172,7 +159,6 @@ func TestDatabaseGaugesMatchRows(t *testing.T) {
 		}
 	}
 
-	// Gauges follow the database, not process activity.
 	if _, err := p.Exec(ctx, `UPDATE messages SET state = 'sent', sent_at = now(), provider_message_id = 'p-late'
 		WHERE campaign_id = $1 AND state = 'queued'`, a[0]); err != nil {
 		t.Fatal(err)
@@ -183,8 +169,6 @@ func TestDatabaseGaugesMatchRows(t *testing.T) {
 	}
 }
 
-// A scrape does not hang on a slow database: the collector has its own
-// 2 s timeout.
 func TestDatabaseGaugesTimeout(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	ctx := context.Background()
@@ -223,7 +207,6 @@ func userIDs(t *testing.T, p *pgxpool.Pool, n int) []string {
 	return ids
 }
 
-// sendingCampaign returns a campaign id and its approved revision id.
 func sendingCampaign(t *testing.T, p *pgxpool.Pool) [2]string {
 	t.Helper()
 	ctx := context.Background()

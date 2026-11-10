@@ -8,9 +8,6 @@ import (
 
 const module = "github.com/BoraKaraman1/insider_one_smart_composer_case"
 
-// The mock provider imports no app package, so it cannot cheat: it cannot
-// read the messages table or share code with the worker it is testing. Test
-// files may use internal/testdb; only the package itself is checked.
 func TestImportsNoAppPackage(t *testing.T) {
 	pkg, err := build.ImportDir(".", 0)
 	if err != nil {

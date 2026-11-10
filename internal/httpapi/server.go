@@ -25,7 +25,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// HTTP-level error codes, next to the validation codes.
 const (
 	codeUnauthorized = "unauthorized"
 	codeBodyTooLarge = "body_too_large"
@@ -37,37 +36,30 @@ const (
 	queryTimeout = 3 * time.Second
 )
 
-// Server holds the API's dependencies.
 type Server struct {
 	Config  Config
 	Pool    *pgxpool.Pool
 	Schemas *schema.Set
 	Log     *slog.Logger
-	Now     func() time.Time // defaults to time.Now; tests pin it
-	// River is an insert-only client: generate and approve enqueue jobs in
-	// the same transaction as their transition, and cancel cancels them.
+	Now     func() time.Time
+	// Kuyruk istemcisi yalnızca iş ekler ve iptal eder, üretim ile onay durum geçişiyle aynı işlemde kuyruğa girer.
 	River *river.Client[pgx.Tx]
-	// Hub wakes event streams on new events. Without one they only poll.
+	// Bildirim merkezi yoksa akışlar yalnızca yoklama yapar.
 	Hub          *Hub
-	Heartbeat    time.Duration // SSE heartbeat; DefaultHeartbeat if zero
-	PollInterval time.Duration // SSE poll; DefaultPollInterval if zero
-	// Metrics serves GET /metrics outside auth and counts requests. Nil
-	// serves and counts nothing.
-	Metrics Metrics
+	Heartbeat    time.Duration
+	PollInterval time.Duration
+	Metrics      Metrics
 }
 
-// Metrics is what the API reports. *metrics.Registry satisfies it.
 type Metrics interface {
 	Handler() http.Handler
 	HTTPRequest(route string, status int)
 	SSEStreams(delta int)
 }
 
-// eventsRoute is the SSE route, counted by sse_streams.
 const eventsRoute = "GET /api/campaigns/{id}/events"
 
-// Handler builds the routes. It refuses to build an open API: with no token,
-// ALLOW_UNAUTHENTICATED must have been set explicitly.
+// Anahtar yoksa doğrulamasız çalışma açıkça verilmeden servis kurulmaz.
 func (s *Server) Handler() (http.Handler, error) {
 	if s.Config.AdminToken == "" && !s.Config.AllowUnauthenticated {
 		return nil, ErrNoToken
@@ -87,22 +79,18 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	// Everything under /api is behind auth, unknown paths included, so an
-	// unauthenticated caller cannot map the routes.
+	// Arayüz altındaki bilinmeyen yollar da kimlik ister ki rota listesi sızmasın.
 	mux.Handle("/api/", s.auth(api))
 	var h http.Handler = mux
 	if s.Metrics != nil {
 		mux.Handle("GET /metrics", s.Metrics.Handler())
-		s.Metrics.SSEStreams(0) // exposed at 0 before the first stream
+		s.Metrics.SSEStreams(0)
 		h = s.countRequests(mux, api)
 	}
 	return s.requestID(s.logRequests(h)), nil
 }
 
-// countRequests counts each request by its mux pattern, never by its path,
-// so no id becomes a label value. Routes under /api are resolved on the
-// inner mux even when auth rejects the request. A path no pattern matches
-// is "unmatched". Event stream requests in flight move sse_streams.
+// Sayım etiketi istek yolu değil kayıtlı kalıptır ki kimlik etiket olmasın.
 func (s *Server) countRequests(mux, api *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, route := mux.Handler(r)
@@ -126,8 +114,7 @@ type ctxKey struct{}
 
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
-// requestID keeps a well-formed X-Request-ID and replaces anything else, so
-// a caller cannot inject log lines or huge values.
+// Biçimsiz istek kimliği değiştirilir ki günlüğe satır veya dev değer girmesin.
 func (s *Server) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
@@ -156,12 +143,9 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets http.ResponseController reach the connection (flush, write
-// deadline) through this wrapper.
+// Yanıt denetçisi sarmalayıcının altındaki bağlantıya ulaşsın.
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// logRequests logs method, path, status and duration. Never bodies, query
-// strings or headers.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -172,11 +156,10 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	})
 }
 
-// auth checks the bearer token. Both sides are hashed first, so the
-// constant-time compare also hides the token's length.
+// İki taraf da önce özetlenir ki sabit zamanlı karşılaştırma uzunluğu da gizlesin.
 func (s *Server) auth(next http.Handler) http.Handler {
 	if s.Config.AdminToken == "" {
-		return next // only reachable with AllowUnauthenticated; Handler checks
+		return next
 	}
 	want := sha256.Sum256([]byte(s.Config.AdminToken))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,8 +178,6 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz checks the database is reachable and fully migrated. Liveness
-// (healthz) deliberately checks nothing outside the process.
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -207,7 +188,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		notReady("database unreachable")
 		return
 	}
-	db := stdlib.OpenDBFromPool(s.Pool) // goose needs database/sql; closing it leaves the pool open
+	db := stdlib.OpenDBFromPool(s.Pool) // göç aracı standart sürücü ister ve kapatmak havuzu açık bırakır
 	defer db.Close()
 	if pending, err := store.Pending(ctx, db); err != nil || pending {
 		notReady("migrations pending")
@@ -222,7 +203,6 @@ type countResponse struct {
 	SeededAt *time.Time `json:"seeded_at"`
 }
 
-// count validates a segment rule and returns its audience size.
 func (s *Server) count(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	doc, err := schema.Decode(r.Body)

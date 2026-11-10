@@ -1,6 +1,3 @@
-# Weekly update PRs, at most 5 open per ecosystem. Minor and patch updates
-# are one group, so a quiet week is one PR per ecosystem. A Go base-image
-# bump fails TestToolchainPinned until go.mod's toolchain line moves too.
 version: 2
 updates:
   - package-ecosystem: gomod

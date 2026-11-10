@@ -16,21 +16,16 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// HTTP-level error codes of the campaign routes.
 const (
 	codeNotFound          = "not_found"
 	codeVersionConflict   = "version_conflict"
 	codeInvalidTransition = "invalid_transition"
 )
 
-// actor is who the audit trail names. There is one admin token, so there is
-// one actor.
 const actor = "admin"
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// campaignRoutes registers the stage 0 campaign routes. Generate, approve
-// and the read APIs of later stages go in their own files.
 func (s *Server) campaignRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/campaigns", s.createCampaign)
 	api.HandleFunc("GET /api/campaigns/{id}", s.withCampaignID(s.getCampaign))
@@ -39,8 +34,7 @@ func (s *Server) campaignRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/campaigns/{id}/cancel", s.withCampaignID(s.versionAction(s.cancel)))
 }
 
-// withCampaignID answers 404 for an id that is not a UUID, so it never
-// reaches a query.
+// Biçimsiz kimlik sorguya gitmeden bulunamadı olur.
 func (s *Server) withCampaignID(h func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -52,7 +46,7 @@ func (s *Server) withCampaignID(h func(http.ResponseWriter, *http.Request, strin
 	}
 }
 
-// decodeBody reads one JSON value. On failure it has written the response.
+// Hata olursa cevap burada yazılmış olur.
 func decodeBody(w http.ResponseWriter, r *http.Request) (any, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	doc, err := schema.Decode(r.Body)
@@ -68,7 +62,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request) (any, bool) {
 	return doc, true
 }
 
-// fields checks that doc is an object with exactly the required keys.
 func fields(doc any, res *validation.Result, keys ...string) map[string]any {
 	m, ok := doc.(map[string]any)
 	if !ok {
@@ -90,11 +83,10 @@ func fields(doc any, res *validation.Result, keys ...string) map[string]any {
 	return m
 }
 
-// version reads the campaign version a client sends back.
 func version(m map[string]any, res *validation.Result) int {
 	v, present := m["version"]
 	if !present {
-		return 0 // reported by fields
+		return 0
 	}
 	n, ok := v.(json.Number)
 	i, err := n.Int64()
@@ -105,8 +97,6 @@ func version(m map[string]any, res *validation.Result) int {
 	return int(i)
 }
 
-// campaignView is a campaign with its current revision, audit trail and
-// the cursor of its latest generation.
 type campaignView struct {
 	Campaign   store.Campaign  `json:"campaign"`
 	Revision   *store.Revision `json:"revision"`
@@ -114,15 +104,11 @@ type campaignView struct {
 	Generation *generationView `json:"generation"`
 }
 
-// generationView lets a client reopen the latest generation's stream after
-// a page refresh. It is null before the first generation.
 type generationView struct {
 	EventsURL string `json:"events_url"`
 }
 
-// eventsURL is the stream of the generation whose started event has id
-// started. The stream begins at that event, so an older generation's done
-// or failed is never read as this one's.
+// Akış bu başlangıç olayından açılır ki eski üretimin bitişi buna ait sanılmasın.
 func eventsURL(id string, started int64) string {
 	return "/api/campaigns/" + id + "/events?after=" + strconv.FormatInt(started-1, 10)
 }
@@ -158,7 +144,6 @@ func (s *Server) loadView(ctx context.Context, id string) (campaignView, error) 
 	return v, nil
 }
 
-// writeView answers with the campaign as it is now.
 func (s *Server) writeView(w http.ResponseWriter, r *http.Request, status int, id string) {
 	v, err := s.loadView(r.Context(), id)
 	if err != nil {
@@ -168,7 +153,6 @@ func (s *Server) writeView(w http.ResponseWriter, r *http.Request, status int, i
 	writeJSON(w, status, v)
 }
 
-// fail maps a campaign error to its status code.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, campaign.ErrNotFound):
@@ -207,7 +191,6 @@ func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request, id string) 
 	s.writeView(w, r, http.StatusOK, id)
 }
 
-// cancel cancels the campaign and, through River, its generate job.
 func (s *Server) cancel(ctx context.Context, db campaign.Beginner, id string, version int, actor string) error {
 	var jc campaign.JobCanceller
 	if s.River != nil {
@@ -216,7 +199,6 @@ func (s *Server) cancel(ctx context.Context, db campaign.Beginner, id string, ve
 	return campaign.CancelWithJobs(ctx, db, jc, id, version, actor)
 }
 
-// versionAction serves an action whose body is {"version": n}.
 func (s *Server) versionAction(action func(context.Context, campaign.Beginner, string, int, string) error) func(http.ResponseWriter, *http.Request, string) {
 	return func(w http.ResponseWriter, r *http.Request, id string) {
 		doc, ok := decodeBody(w, r)
@@ -240,8 +222,6 @@ func (s *Server) versionAction(action func(context.Context, campaign.Beginner, s
 	}
 }
 
-// editCampaign stores a human edit. It goes through the same validator as
-// LLM output (rule 7); an invalid edit gets 422 and is never stored.
 func (s *Server) editCampaign(w http.ResponseWriter, r *http.Request, id string) {
 	doc, ok := decodeBody(w, r)
 	if !ok {
@@ -255,7 +235,7 @@ func (s *Server) editCampaign(w http.ResponseWriter, r *http.Request, id string)
 		res.Error("/base_revision_id", validation.InvalidType, "expected a string")
 	}
 	var rev campaign.Revision
-	var revRes validation.Result // its paths are relative to the revision, as stored
+	var revRes validation.Result
 	if raw, present := m["revision"]; present {
 		rev, revRes = campaign.ValidateRevision(s.Schemas, raw)
 		for _, is := range revRes.Errors {

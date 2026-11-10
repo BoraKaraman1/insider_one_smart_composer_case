@@ -92,7 +92,7 @@ func TestValidateErrors(t *testing.T) {
 	}
 	cases := []struct {
 		name, json string
-		want       []string // "path code", exactly, in path order
+		want       []string
 	}{
 		{"missing version", `{"match":"all","conditions":[` + cityEq + `]}`, []string{"/version required"}},
 		{"version 2", `{"version":2,"match":"all","conditions":[` + cityEq + `]}`, []string{"/version unknown_value"}},

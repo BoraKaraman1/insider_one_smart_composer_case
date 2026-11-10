@@ -15,7 +15,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// freshDB opens an empty, unmigrated database for one test.
 func freshDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("pgx", testdb.Fresh(t))
@@ -69,7 +68,7 @@ func TestMigrateUpDownUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	sources := p.ListSources()
-	want := sources[len(sources)-1].Version // the highest embedded migration
+	want := sources[len(sources)-1].Version
 	if v, err := p.GetDBVersion(ctx); err != nil || v != want {
 		t.Fatalf("version %d, %v; want %d", v, err, want)
 	}
@@ -91,7 +90,6 @@ func TestMigrateUpDownUp(t *testing.T) {
 	}
 }
 
-// pgCode returns the Postgres error code of err, or "" for success.
 func pgCode(err error) string {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -174,7 +172,6 @@ func TestConstraints(t *testing.T) {
 		}
 	}
 
-	// The valid paths still work.
 	valid := []struct {
 		name  string
 		query string
@@ -196,8 +193,6 @@ func execErr(db *sql.DB, q string, args ...any) error {
 	return err
 }
 
-// TestCatalogChecksMatchGo keeps the database CHECK lists equal to the Go
-// catalog, the third copy next to the JSON Schema.
 func TestCatalogChecksMatchGo(t *testing.T) {
 	db := freshDB(t)
 	if err := Migrate(context.Background(), db); err != nil {

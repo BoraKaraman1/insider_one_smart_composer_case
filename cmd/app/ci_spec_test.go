@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// The CI workflow, read as text so the check needs no YAML library.
-// Stage 0 required the lint, vet, migrate, seed and test steps. Stream 4
-// splits that work across lint-test and integration and adds the rest.
-
 func readRepoFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile("../../" + path)
@@ -20,7 +16,6 @@ func readRepoFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-// seedArgs is the seed command line of the integration template.
 var seedArgs = regexp.MustCompile(`seed -as-of (\S+) -seed (\d+) -users (\d+)`)
 
 func TestCIWorkflowGoJob(t *testing.T) {
@@ -48,8 +43,6 @@ func TestCIWorkflowGoJob(t *testing.T) {
 	}
 }
 
-// Stream 4: every job is bounded, third-party actions are pinned to a
-// commit, and the extra jobs exist.
 func TestCIStream4(t *testing.T) {
 	ci := readRepoFile(t, ".github/workflows/ci.yml")
 	jobs := []string{"lint-test", "integration", "fuzz", "web", "eval", "docker", "secrets"}
@@ -101,8 +94,7 @@ func TestCIStream4(t *testing.T) {
 	}
 }
 
-// The template is seeded exactly as make test seeds it, so the expected
-// counts in docs/seed-data.md hold in CI too.
+// Tohumlama yerel testle aynıdır ki beklenen sayılar derlemede de tutsun.
 func TestCISeedsLikeMakeTest(t *testing.T) {
 	mk := seedArgs.FindStringSubmatch(readRepoFile(t, "Makefile"))
 	if mk == nil {
@@ -117,7 +109,7 @@ func TestCISeedsLikeMakeTest(t *testing.T) {
 	}
 }
 
-// Rule 1: CI never has the API key. It runs mock mode only.
+// Derleme anahtar taşımaz ve yalnız sahte kipte çalışır.
 func TestCIHasNoAPIKey(t *testing.T) {
 	ci := readRepoFile(t, ".github/workflows/ci.yml")
 	if strings.Contains(ci, "ANTHROPIC_API_KEY") && !regexp.MustCompile(`ANTHROPIC_API_KEY:\s*['"]{2}`).MatchString(ci) {
@@ -131,7 +123,6 @@ func TestCIHasNoAPIKey(t *testing.T) {
 	}
 }
 
-// Stream 1 adds the web job as soon as web/ exists.
 func TestCIWebJobOnceWebExists(t *testing.T) {
 	if _, err := os.Stat("../../web/package.json"); err != nil {
 		t.Skip("web/ does not exist yet")

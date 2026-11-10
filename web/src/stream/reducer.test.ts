@@ -1,12 +1,3 @@
-// Plan 3, 1.2 and 1.7: the pure reducer over generation events.
-//
-// Contract assumed (src/stream/reducer.ts):
-//   initialState(): GenState
-//   reduce(state: GenState, e: GenEvent): GenState    pure, never mutates state
-//   GenEvent { id: number; event: string; data: any }
-//   GenState { phase: 'idle' | 'streaming' | 'done' | 'failed'; version: number | null;
-//              segment: unknown | null; fields: Record<string, string>; attempt: number;
-//              errors: unknown[]; lastEventId: number }
 import { describe, expect, it } from 'vitest'
 import { initialState, reduce, type GenEvent, type GenState } from './reducer'
 
@@ -93,7 +84,7 @@ describe('reducer', () => {
     expect(s.fields).toEqual({})
     expect(s.errors).toEqual(errors)
     expect(s.phase).toBe('streaming')
-    expect(s.segment).not.toBeNull() // a content retry keeps the segment
+    expect(s.segment).not.toBeNull() // İçerik denemesi kitleyi silmez.
     const next = run([delta(5, 'sms.body', 'Merhaba', 2)], s)
     expect(next.fields['sms.body']).toBe('Merhaba')
     expect(next.attempt).toBe(2)

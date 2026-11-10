@@ -24,20 +24,17 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// Config is one eval run.
 type Config struct {
-	AdminURL string // admin connection to the server that holds Template
-	Template string // a migrated and seeded database to clone
+	AdminURL string
+	Template string
 	Cases    []Case
-	Runs     int // times each case runs; at least 1
+	Runs     int
 	LLM      campaign.LLM
-	Mode     string // "mock" or "anthropic", for the report header
-	// Sleep waits out transport backoff. Nil waits on the wall clock.
-	Sleep func(context.Context, time.Duration) error
-	Log   *slog.Logger // nil discards
+	Mode     string
+	Sleep    func(context.Context, time.Duration) error
+	Log      *slog.Logger
 }
 
-// Report is the result of a run. It holds no key and no recipient data.
 type Report struct {
 	Mode            string                   `json:"mode"`
 	Model           string                   `json:"model"`
@@ -46,19 +43,17 @@ type Report struct {
 	Runs            int                      `json:"runs"`
 	Numbers         Numbers                  `json:"numbers"`
 	Cases           []CaseResult             `json:"cases"`
-	Correct         map[string]Tally         `json:"correct"`   // by category, injection cases left out
-	Injection       map[InjectionOutcome]int `json:"injection"` // injection cases only
+	Correct         map[string]Tally         `json:"correct"`
+	Injection       map[InjectionOutcome]int `json:"injection"`
 	GenerationP50MS int                      `json:"generation_p50_ms"`
 	GenerationP95MS int                      `json:"generation_p95_ms"`
 }
 
-// Tally counts correct results out of a total.
 type Tally struct {
 	Correct int `json:"correct"`
 	Total   int `json:"total"`
 }
 
-// CaseResult is one case in one run.
 type CaseResult struct {
 	Name         string `json:"name"`
 	Category     string `json:"category"`
@@ -69,11 +64,6 @@ type CaseResult struct {
 	GenerationMS int    `json:"generation_ms"`
 }
 
-// Run clones the template into its own eval_ database, inserts the
-// fixtures, runs every case through campaign.Generator.Run in order and
-// scores it. The clone is dropped on return, also on error. Generator.Now
-// is the clone's seed_meta.as_of, so the run fails before any case without
-// a seed_meta row.
 func Run(ctx context.Context, cfg Config) (rep Report, err error) {
 	if cfg.Runs < 1 {
 		cfg.Runs = 1
@@ -171,8 +161,6 @@ func Run(ctx context.Context, cfg Config) (rep Report, err error) {
 	return rep, nil
 }
 
-// runCase creates a campaign for the brief, moves it to generating through
-// the state machine (no River job is queued) and runs the generator.
 func runCase(ctx context.Context, gen *campaign.Generator, pool *pgxpool.Pool, c Case, fx Fixtures, asOf time.Time) (CaseResult, []CallRow, error) {
 	cr := CaseResult{Name: c.Name, Category: c.Category}
 	camp, err := store.CreateCampaign(ctx, pool, c.Brief, "https://example.invalid/eval")
@@ -187,8 +175,7 @@ func runCase(ctx context.Context, gen *campaign.Generator, pool *pgxpool.Pool, c
 	if err := gen.Run(ctx, args); err != nil {
 		return cr, nil, err
 	}
-	// Rounded up, so a generation always counts as at least 1 ms.
-	cr.GenerationMS = int((time.Since(start) + time.Millisecond - 1) / time.Millisecond)
+	cr.GenerationMS = int((time.Since(start) + time.Millisecond - 1) / time.Millisecond) // süre yukarı yuvarlanır, en az bir milisaniye sayılır
 	if err := ctx.Err(); err != nil {
 		return cr, nil, err
 	}
@@ -238,8 +225,6 @@ func runCase(ctx context.Context, gen *campaign.Generator, pool *pgxpool.Pool, c
 	return cr, calls, nil
 }
 
-// noQueue stands in for River: StartGeneration inserts no job, and the
-// harness calls Generator.Run itself.
 type noQueue struct{}
 
 func (noQueue) InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error) {

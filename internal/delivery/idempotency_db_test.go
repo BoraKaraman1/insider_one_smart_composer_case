@@ -15,9 +15,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockprovider"
 )
 
-// Rule 10, the ambiguous case: the provider sent, then the connection
-// dropped. The retry carries the same key, gets the replay, and the person
-// gets one message.
 func TestSendThenDrop(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -33,7 +30,6 @@ func TestSendThenDrop(t *testing.T) {
 	assertOneSend(t, e, id)
 }
 
-// The provider sent, but answered after our timeout.
 func TestSendThenLateAnswer(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -49,8 +45,6 @@ func TestSendThenLateAnswer(t *testing.T) {
 	assertOneSend(t, e, id)
 }
 
-// assertOneSend checks the message is sent, the provider sent it once, and
-// every request carried the message id as its key.
 func assertOneSend(t *testing.T, e *sendEnv, id string) {
 	t.Helper()
 	m := loadMessage(t, e.pool, id)
@@ -70,9 +64,6 @@ func assertOneSend(t *testing.T, e *sendEnv, id string) {
 	}
 }
 
-// The worker dies after the provider call and before its state update. The
-// message stays in sending; River runs the job again, which reclaims it,
-// gets the replay with the first provider id, and sends nothing new.
 func TestCrashAfterProviderCall(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -81,7 +72,7 @@ func TestCrashAfterProviderCall(t *testing.T) {
 	e.worker.DB = db
 	e.prov.hooks(nil, func(string) {
 		if !db.down.Load() {
-			db.down.Store(true) // the process dies right after the call
+			db.down.Store(true)
 		}
 	})
 
@@ -117,8 +108,6 @@ func TestCrashAfterProviderCall(t *testing.T) {
 	}
 }
 
-// A message left in sending by a crash, before the provider call. The next
-// run may take it over (sending is an allowed predecessor) and send it.
 func TestReclaimStuckSending(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -136,16 +125,11 @@ func TestReclaimStuckSending(t *testing.T) {
 	}
 }
 
-// The same job runs twice at once (River rescued a job that was still
-// running). Both may reach the provider; its per-key lock gives one send and
-// one replay, and the guarded sent update applies once.
 func TestSameJobTwiceAtOnce(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
 	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
 
-	// Hold the first request until the second arrives, so the two calls
-	// overlap at the provider when both runs get that far.
 	var arrived sync.WaitGroup
 	arrived.Add(2)
 	both := make(chan struct{})
@@ -185,12 +169,6 @@ func TestSameJobTwiceAtOnce(t *testing.T) {
 	}
 }
 
-// The end to end chaos run: a real River client with the fan-out and send
-// workers, the real per-channel limiters, and the mock provider at 10% 5xx,
-// 5% 429, 3% send-then-drop and 2% hang. Three messages get a forced 400 on
-// their first call, so the "4xx is never retried" check has something to
-// check. The seed is fixed; request order still depends on scheduling, so
-// the assertions are invariants, not exact counts.
 func TestEndToEndChaos(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end to end run")
@@ -231,8 +209,6 @@ func TestEndToEndChaos(t *testing.T) {
 	}
 	fanout.Jobs = client
 
-	// Fan out before the client starts, so the forced 400s can be set on
-	// known message ids before any send job runs.
 	ctx := context.Background()
 	if err := fanout.Work(ctx, fanoutJob(c.ID)); err != nil {
 		t.Fatal(err)
@@ -294,10 +270,6 @@ func TestEndToEndChaos(t *testing.T) {
 	if s.MaxSendsPerKey != 1 {
 		t.Errorf("max sends per key %d, want 1", s.MaxSendsPerKey)
 	}
-	// Every sent message was sent by the provider. The provider may also have
-	// sent a message we marked dead: its call broke off after the send
-	// (status 0, the ambiguous case) and every retry failed. From here a
-	// drop and a hang look the same, so that count is an upper bound.
 	ambiguousDead := 0
 	for _, m := range msgs {
 		if loadMessage(t, pool, m.ID).State == "dead" &&
@@ -309,7 +281,6 @@ func TestEndToEndChaos(t *testing.T) {
 		t.Errorf("%d messages sent and %d dead after an ambiguous call; the provider sent %d", counts["sent"], ambiguousDead, s.UniqueSends)
 	}
 
-	// 4xx is never retried: after a 400 no request carries that key again.
 	for _, m := range msgs {
 		calls := prov.callsFor(m.ID)
 		for i, cl := range calls {
@@ -327,8 +298,6 @@ func TestEndToEndChaos(t *testing.T) {
 		t.Errorf("campaign %s; three messages failed, want completed_with_failures", state)
 	}
 
-	// Rule 8 seen from the provider. Network jitter can bunch arrivals a
-	// little, so allow a small tolerance; the synctest test is the strict one.
 	for ch, times := range s.ReceivedAt {
 		if w := maxInWindow(times, time.Second); w > 105 {
 			t.Errorf("%s: %d requests arrived within one second", ch, w)

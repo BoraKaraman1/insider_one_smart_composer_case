@@ -12,8 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// deliveryUsers returns n seed user ids with their phone and email, so the
-// tests can check that neither leaks into a response.
 func deliveryUsers(t *testing.T, p *pgxpool.Pool, n int) (ids, contacts []string) {
 	t.Helper()
 	rows, err := p.Query(context.Background(), `SELECT id::text, phone, email FROM users ORDER BY id LIMIT $1`, n)
@@ -34,8 +32,6 @@ func deliveryUsers(t *testing.T, p *pgxpool.Pool, n int) (ids, contacts []string
 	return ids, contacts
 }
 
-// addMessage inserts a message. set is an optional SET clause in which $2
-// is the server's "now".
 func addMessage(t *testing.T, p *pgxpool.Pool, f fixture, user, channel, set string, now time.Time) string {
 	t.Helper()
 	ctx := context.Background()
@@ -57,9 +53,6 @@ func addMessage(t *testing.T, p *pgxpool.Pool, f fixture, user, channel, set str
 	return id
 }
 
-// Stats count messages per channel and state. Retrying is not a stored
-// state: it is queued with attempts above 0, and it is not counted as queued
-// too, so the numbers add up to the total.
 func TestDeliveryStats(t *testing.T) {
 	h, p, now := approveAPI(t)
 	f := insertCampaign(t, p, "sending", 1)
@@ -75,7 +68,7 @@ func TestDeliveryStats(t *testing.T) {
 	add(users[6], "email", `state = 'dead', attempts = 6, last_error_class = 'server_error'`)
 	add(users[7], "email", `state = 'skipped', last_error_class = 'no_consent'`)
 	add(users[8], "email", `state = 'sent', attempts = 2, provider_message_id = 'q', sent_at = $2`)
-	addMessage(t, p, other, users[0], "sms", "", now) // another campaign's
+	addMessage(t, p, other, users[0], "sms", "", now)
 
 	rec := do(h, "GET", "/api/campaigns/"+f.ID+"/stats", "", bearer)
 	if rec.Code != http.StatusOK {
@@ -101,8 +94,6 @@ func TestDeliveryStats(t *testing.T) {
 	}
 }
 
-// A campaign with no messages yet has every count at zero, for both
-// channels, so the dashboard need not guess.
 func TestDeliveryStatsEmpty(t *testing.T) {
 	h, p, _ := approveAPI(t)
 	f := insertCampaign(t, p, "approved", 1)
@@ -140,8 +131,6 @@ type attentionItem struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
-// Rule 6: stuck and failed messages are visible. "Now" is the server's
-// clock, so the age thresholds are exact.
 func TestAttentionList(t *testing.T) {
 	h, p, now := approveAPI(t)
 	f := insertCampaign(t, p, "sending", 1)
@@ -155,14 +144,12 @@ func TestAttentionList(t *testing.T) {
 		add(2, `attempts = 1, last_error_class = 'rate_limited', next_attempt_at = $2 - interval '31 seconds', updated_at = $2`):           "overdue",
 		add(3, `state = 'failed', attempts = 1, last_error_class = 'client_error', last_error = 'provider answered 400', updated_at = $2`): "failed",
 		add(4, `state = 'dead', attempts = 6, last_error_class = 'server_error', last_error = 'provider answered 503', updated_at = $2`):   "dead",
-		// Never attempted, 2 minutes after fan-out: nothing drains the queue.
-		add(11, `created_at = $2 - interval '121 seconds', updated_at = $2 - interval '121 seconds'`): "not_started",
+		add(11, `created_at = $2 - interval '121 seconds', updated_at = $2 - interval '121 seconds'`):                                      "not_started",
 	}
-	// Not in the list.
-	add(5, `state = 'sending', attempts = 1, updated_at = $2 - interval '10 seconds'`) // exactly 10 s: not yet stuck
+	add(5, `state = 'sending', attempts = 1, updated_at = $2 - interval '10 seconds'`)
 	add(6, `attempts = 2, last_error_class = 'server_error', next_attempt_at = $2 - interval '5 seconds', updated_at = $2`)
-	add(7, `updated_at = $2`)                                                                     // fresh and queued
-	add(12, `created_at = $2 - interval '119 seconds', updated_at = $2 - interval '119 seconds'`) // queued, under 2 minutes
+	add(7, `updated_at = $2`)
+	add(12, `created_at = $2 - interval '119 seconds', updated_at = $2 - interval '119 seconds'`)
 	add(8, `state = 'sent', attempts = 1, provider_message_id = 'p', sent_at = $2, updated_at = $2`)
 	add(9, `state = 'skipped', last_error_class = 'cancelled', updated_at = $2`)
 	addMessage(t, p, other, users[10], "sms", `state = 'failed', attempts = 1, last_error_class = 'client_error'`, now)
@@ -197,7 +184,6 @@ func TestAttentionList(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("attention list %v\nwant %v", got, want)
 	}
-	// The dashboard never gets contact data.
 	for _, c := range contacts {
 		if strings.Contains(rec.Body.String(), c) {
 			t.Errorf("response contains contact data %q", c)

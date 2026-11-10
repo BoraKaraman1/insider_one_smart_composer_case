@@ -3,8 +3,6 @@ import { ref } from 'vue'
 import type { CampaignView } from '../api/types'
 import type { Draft } from '../composables/useDraft'
 
-// A 409 on save: the draft is kept. Compare shows the server's latest copy
-// next to the draft; only after a compare can the draft be saved on top.
 defineProps<{ draft: Draft; latest: CampaignView | null }>()
 const emit = defineEmits<{ useLatest: []; saveOnTop: [] }>()
 const comparing = ref(false)

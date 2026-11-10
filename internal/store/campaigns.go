@@ -10,17 +10,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// DB runs queries. *pgxpool.Pool, *pgx.Conn and pgx.Tx satisfy it.
 type DB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Campaign is a campaigns row.
 type Campaign struct {
 	ID                 string     `json:"id"`
 	Brief              string     `json:"brief"`
@@ -48,34 +45,27 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 	return c, err
 }
 
-// CreateCampaign inserts a draft campaign.
 func CreateCampaign(ctx context.Context, db DB, brief, campaignURL string) (Campaign, error) {
 	return scanCampaign(db.QueryRow(ctx, `INSERT INTO campaigns (brief, campaign_url) VALUES ($1, $2) RETURNING `+campaignCols,
 		brief, campaignURL))
 }
 
-// GetCampaign reads one campaign, or returns ErrNotFound.
 func GetCampaign(ctx context.Context, db DB, id string) (Campaign, error) {
 	return scanCampaign(db.QueryRow(ctx, `SELECT `+campaignCols+` FROM campaigns WHERE id = $1`, id))
 }
 
-// UpdateCampaignState is the guarded update of rule 7. It reports false when
-// the campaign is not in state from at version, or does not exist.
 func UpdateCampaignState(ctx context.Context, db DB, id, from, to string, version int) (bool, error) {
 	tag, err := db.Exec(ctx, `UPDATE campaigns SET state = $2, version = version + 1, updated_at = now()
 		WHERE id = $1 AND state = $3 AND version = $4`, id, to, from, version)
 	return tag.RowsAffected() == 1, err
 }
 
-// InsertCampaignEvent writes one audit row. An empty from is stored as NULL
-// (the campaign was just created).
 func InsertCampaignEvent(ctx context.Context, db DB, id, from, to, actor, reason string) error {
 	_, err := db.Exec(ctx, `INSERT INTO campaign_events (campaign_id, from_state, to_state, actor, reason)
 		VALUES ($1, NULLIF($2, ''), $3, $4, $5)`, id, from, to, actor, reason)
 	return err
 }
 
-// Event is a campaign_events row.
 type Event struct {
 	From   *string   `json:"from_state"`
 	To     string    `json:"to_state"`
@@ -84,7 +74,6 @@ type Event struct {
 	At     time.Time `json:"at"`
 }
 
-// ListCampaignEvents returns a campaign's audit trail, oldest first.
 func ListCampaignEvents(ctx context.Context, db DB, id string) ([]Event, error) {
 	rows, err := db.Query(ctx, `SELECT from_state::text, to_state::text, actor, reason, at
 		FROM campaign_events WHERE campaign_id = $1 ORDER BY id`, id)
@@ -98,15 +87,12 @@ func ListCampaignEvents(ctx context.Context, db DB, id string) ([]Event, error) 
 	})
 }
 
-// SkipQueuedMessages takes a cancelled campaign's queued messages out of the
-// queue. Messages being sent or already final are left alone.
 func SkipQueuedMessages(ctx context.Context, db DB, campaignID string) (int64, error) {
 	tag, err := db.Exec(ctx, `UPDATE messages SET state = 'skipped', last_error_class = 'cancelled', updated_at = now()
 		WHERE campaign_id = $1 AND state = 'queued'`, campaignID)
 	return tag.RowsAffected(), err
 }
 
-// Revision is a campaign_revisions row.
 type Revision struct {
 	ID            string          `json:"id"`
 	CampaignID    string          `json:"campaign_id"`
@@ -136,29 +122,24 @@ func scanRevision(row pgx.Row) (Revision, error) {
 	return r, err
 }
 
-// GetRevision reads one revision of a campaign, or returns ErrNotFound.
 func GetRevision(ctx context.Context, db DB, campaignID, id string) (Revision, error) {
 	return scanRevision(db.QueryRow(ctx, `SELECT `+revisionCols+` FROM campaign_revisions WHERE campaign_id = $1 AND id = $2`,
 		campaignID, id))
 }
 
-// NewRevision is a validated revision to store.
 type NewRevision struct {
 	CampaignID    string
-	Source        string // "llm" or "human"
-	Segment       []byte // normalized rule JSON
+	Source        string
+	Segment       []byte
 	SMSBody       string
 	EmailSubject  string
 	EmailBody     string
-	Warnings      []byte // JSON array of issues
+	Warnings      []byte
 	AudienceTotal int
 	SMSEligible   int
 	EmailEligible int
 }
 
-// InsertRevision stores the next revision of a campaign and makes it the
-// current one. The caller holds the campaign row lock (a transition in the
-// same transaction), so the revision number cannot race.
 func InsertRevision(ctx context.Context, db DB, nr NewRevision) (Revision, error) {
 	r, err := scanRevision(db.QueryRow(ctx, `INSERT INTO campaign_revisions
 		(campaign_id, n, source, segment, sms_body, email_subject, email_body, warnings, audience_total, sms_eligible, email_eligible)

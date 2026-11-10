@@ -1,5 +1,3 @@
-// useGeneration: reconnect with Last-Event-ID, reconcile from the view, and
-// never reopen a stream after its terminal event (plan 1.2).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import type { CampaignView } from '../api/types'
@@ -79,7 +77,7 @@ describe('useGeneration', () => {
     expect(s.fetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(s.fetchMock).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(1_000) // doubled
+    await vi.advanceTimersByTimeAsync(1_000) // Gecikme ikiye katlandı.
     await done
     expect(s.fetchMock).toHaveBeenCalledTimes(3)
     expect(s.g.state.value.phase).toBe('done')

@@ -1,11 +1,3 @@
-// Plan 3, 1.7: the fetch-based SSE reader. The parser is fed raw text
-// chunks as they come off the stream.
-//
-// Contract assumed (src/api/sse.ts):
-//   SSEMessage { id: string | null; event: string; data: string }
-//   createSSEParser(onMessage: (m: SSEMessage) => void): { push(chunk: string): void; end(): void }
-//   openEventStream(url, { token, lastEventId?, signal?, fetch?, onMessage, onComment? }): Promise<'ended' | 'aborted'>
-//     onComment gets heartbeat comments; the e2e tests use it to see the proxy flush them.
 import { describe, expect, it, vi } from 'vitest'
 import { createSSEParser, openEventStream, type SSEMessage } from './sse'
 

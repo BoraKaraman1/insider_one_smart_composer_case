@@ -18,7 +18,6 @@ import (
 
 var now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-// The class names are the error_class labels in the database and in metrics.
 func TestClassNames(t *testing.T) {
 	names := map[Class]string{
 		Success:     "success",
@@ -36,7 +35,6 @@ func TestClassNames(t *testing.T) {
 	}
 }
 
-// Rule 6: everything is retried except success and other 4xx.
 func TestRetryable(t *testing.T) {
 	for _, c := range []Class{Timeout, RateLimited, ServerError, ConnRefused, ConnReset} {
 		if !c.Retryable() {
@@ -50,8 +48,6 @@ func TestRetryable(t *testing.T) {
 	}
 }
 
-// statusServer answers every request with the status and Retry-After value
-// given in the query string.
 func statusServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,13 +128,10 @@ func TestClassifyRetryAfter(t *testing.T) {
 	}
 }
 
-// freshClient opens a new connection per request, so no test sees an error
-// that only happens on a reused connection.
 func freshClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}
 }
 
-// hijackServer hands each raw connection to fn.
 func hijackServer(t *testing.T, fn func(net.Conn)) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +152,7 @@ func TestClassifyConnRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close() // nothing listens on this port now
+	ln.Close()
 
 	resp, err := post(t, freshClient(2*time.Second), "http://"+addr)
 	if err == nil {
@@ -183,7 +176,7 @@ func TestClassifyConnClosedBeforeResponse(t *testing.T) {
 
 func TestClassifyConnResetByPeer(t *testing.T) {
 	srv := hijackServer(t, func(c net.Conn) {
-		c.(*net.TCPConn).SetLinger(0) // close sends RST instead of FIN
+		c.(*net.TCPConn).SetLinger(0)
 		c.Close()
 	})
 	resp, err := post(t, freshClient(2*time.Second), srv.URL)
@@ -195,8 +188,6 @@ func TestClassifyConnResetByPeer(t *testing.T) {
 	}
 }
 
-// The response headers arrive, then the connection dies inside the body. The
-// caller sees this as a read error and classifies that.
 func TestClassifyUnexpectedEOFInBody(t *testing.T) {
 	srv := hijackServer(t, func(c net.Conn) {
 		io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
@@ -215,12 +206,10 @@ func TestClassifyUnexpectedEOFInBody(t *testing.T) {
 	}
 }
 
-// slowServer answers after the client has given up.
 func slowServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The server notices a closed connection only once the body is read.
-		io.Copy(io.Discard, r.Body)
+		io.Copy(io.Discard, r.Body) // sunucu kapanmayı gövde okununca fark eder
 		select {
 		case <-r.Context().Done():
 		case <-time.After(2 * time.Second):
@@ -259,7 +248,6 @@ func TestClassifyContextDeadline(t *testing.T) {
 	}
 }
 
-// Errors reach Classify wrapped by callers.
 func TestClassifyWrappedErrors(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -278,7 +266,6 @@ func TestClassifyWrappedErrors(t *testing.T) {
 	}
 }
 
-// ceiling is the documented upper bound: min(60s, 1s * 2^attempt).
 func ceiling(attempt int) time.Duration {
 	if attempt >= 6 {
 		return 60 * time.Second
@@ -286,8 +273,6 @@ func ceiling(attempt int) time.Duration {
 	return time.Second << attempt
 }
 
-// Full jitter: uniform over [0, ceiling]. A fixed delay, or "equal jitter"
-// that never goes below half the ceiling, fails the spread checks.
 func TestBackoffFullJitter(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	for attempt := 0; attempt <= 8; attempt++ {
@@ -324,7 +309,6 @@ func TestBackoffLargeAttemptsStayCapped(t *testing.T) {
 	}
 }
 
-// The random source is injected, so a seed fixes the sequence.
 func TestBackoffIsDeterministic(t *testing.T) {
 	a, b := rand.New(rand.NewPCG(7, 7)), rand.New(rand.NewPCG(7, 7))
 	for attempt := range 10 {

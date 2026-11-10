@@ -11,7 +11,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
 )
 
-// Stage is one of the two generation calls.
 type Stage string
 
 const (
@@ -19,10 +18,6 @@ const (
 	Content Stage = "content"
 )
 
-// The system prompts are static per stage, so they can be cached. They hold
-// the catalog and the limits; they never hold recipient data. Prompt wording
-// is the weakest control (rule 4): what the model returns is validated by
-// code and approved by a human either way.
 var systemPrompts = map[Stage]string{
 	Segment: segmentPrompt(),
 	Content: contentPrompt(),
@@ -75,7 +70,6 @@ Rules:
 `, strings.Join(vars, ", "), content.SMSMaxChars, content.SubjectMaxChars)
 }
 
-// SystemPrompt returns the static system prompt of a stage.
 func SystemPrompt(s Stage) string { return systemPrompts[s] }
 
 var promptVersions = map[Stage]string{
@@ -88,26 +82,18 @@ func version(s Stage) string {
 	return string(s) + "-" + hex.EncodeToString(sum[:4])
 }
 
-// PromptVersion names the system prompt of a stage. It changes whenever the
-// prompt text changes, and is stored on every llm_calls row.
 func PromptVersion(s Stage) string { return promptVersions[s] }
 
-// briefTagRe finds the start of anything that reads as a brief tag.
 var briefTagRe = regexp.MustCompile(`(?i)<(\s*/?\s*brief)`)
 
-// wrapBrief puts the brief inside <brief> tags. A "<" that starts a brief tag
-// inside it is escaped, so the brief cannot close the tag or open another.
 func wrapBrief(brief string) string {
 	return "<brief>" + briefTagRe.ReplaceAllString(brief, "&lt;$1") + "</brief>"
 }
 
-// SegmentTurn is the first user turn of the segment stage.
 func SegmentTurn(brief string) string {
 	return wrapBrief(brief) + "\nPropose the segment rule for this brief."
 }
 
-// ContentTurn is the first user turn of the content stage. description is
-// segment.Describe of the validated rule, written by our code.
 func ContentTurn(brief, description string) string {
 	return wrapBrief(brief) + "\nSegment: " + description + "\nWrite the SMS and email copy for this campaign."
 }

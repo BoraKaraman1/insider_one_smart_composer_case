@@ -13,12 +13,10 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// Beginner starts a transaction. *pgxpool.Pool satisfies it.
 type Beginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// ErrNotFound: the campaign does not exist.
 var ErrNotFound = store.ErrNotFound
 
 func inTx(ctx context.Context, db Beginner, fn func(pgx.Tx) error) error {
@@ -33,7 +31,6 @@ func inTx(ctx context.Context, db Beginner, fn func(pgx.Tx) error) error {
 	return tx.Commit(ctx)
 }
 
-// Create stores a draft campaign and its first audit row.
 func Create(ctx context.Context, db Beginner, n New, actor string) (store.Campaign, error) {
 	var c store.Campaign
 	err := inTx(ctx, db, func(tx pgx.Tx) error {
@@ -46,7 +43,6 @@ func Create(ctx context.Context, db Beginner, n New, actor string) (store.Campai
 	return c, err
 }
 
-// Reject moves a campaign in review to rejected.
 func Reject(ctx context.Context, db Beginner, id string, version int, actor string) error {
 	return inTx(ctx, db, func(tx pgx.Tx) error {
 		if _, err := store.GetCampaign(ctx, tx, id); err != nil {
@@ -56,12 +52,6 @@ func Reject(ctx context.Context, db Beginner, id string, version int, actor stri
 	})
 }
 
-// Cancel moves a campaign to cancelled from any state that allows it, and in
-// the same transaction takes its queued messages out of the queue. A worker
-// that already holds one of the other messages loses its guarded update. A
-// generating campaign also gets a failed event with reason cancelled, the
-// last event of its stream. The api uses CancelWithJobs, which also cancels
-// the generate job through River.
 func Cancel(ctx context.Context, db Beginner, id string, version int, actor string) error {
 	return CancelWithJobs(ctx, db, nil, id, version, actor)
 }
@@ -71,7 +61,6 @@ func cancelTx(ctx context.Context, tx pgx.Tx, id string, version int, actor stri
 	if err != nil {
 		return err
 	}
-	// The state read here can be stale; the guarded update then loses.
 	from := State(c.State)
 	if err := Transition(ctx, tx, Move{ID: id, From: from, To: Cancelled, Version: version, Actor: actor}); err != nil {
 		return err
@@ -85,20 +74,16 @@ func cancelTx(ctx context.Context, tx pgx.Tx, id string, version int, actor stri
 	return err
 }
 
-// Edit is a human edit of a campaign in review.
 type Edit struct {
 	ID             string
-	BaseRevisionID string // the revision the reviewer edited
-	Version        int    // the campaign version the reviewer saw
+	BaseRevisionID string
+	Version        int
 	Revision       Revision
 	Warnings       []validation.Issue
 	Actor          string
-	AsOf           time.Time // "now" for the audience count
+	AsOf           time.Time
 }
 
-// SaveEdit stores a validated human edit as a new revision (source human),
-// counts its audience again and keeps the campaign in review. It conflicts
-// when the campaign moved on or the base revision is no longer current.
 func SaveEdit(ctx context.Context, db Beginner, e Edit) (store.Revision, error) {
 	segmentJSON, err := json.Marshal(e.Revision.SegmentDoc)
 	if err != nil {
@@ -117,8 +102,6 @@ func SaveEdit(ctx context.Context, db Beginner, e Edit) (store.Revision, error) 
 		if _, err := store.GetCampaign(ctx, tx, e.ID); err != nil {
 			return err
 		}
-		// The transition locks the row, so the base check below and the
-		// revision number cannot race with another edit.
 		if err := Transition(ctx, tx, Move{ID: e.ID, From: InReview, To: InReview, Version: e.Version, Actor: e.Actor, Reason: "edit"}); err != nil {
 			return err
 		}

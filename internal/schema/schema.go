@@ -1,10 +1,4 @@
-// Package schema loads the embedded JSON Schemas (schemas/), validates
-// instances against them, and derives the reduced schema that is sent to
-// Claude's structured outputs.
-//
-// Two schemas, one source: structured outputs reject keywords such as
-// maxLength and minimum, so ForAPI strips them, and Validate enforces the full
-// schema locally on every response and every human edit.
+// Paket gömülü şemaları yükler ve doğrular.
 package schema
 
 import (
@@ -20,11 +14,8 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/schemas"
 )
 
-// BaseURL is the $id prefix of every embedded schema. Nothing is fetched from
-// it; all schemas are registered from the embedded files.
 const BaseURL = "https://schemas.composer.local/"
 
-// Name identifies an embedded schema file.
 type Name string
 
 const (
@@ -33,17 +24,12 @@ const (
 	Revision    Name = "revision.schema.json"
 )
 
-// Set holds the embedded schemas, raw and compiled. Every entry under $defs
-// is compiled too, so a validator can check one part of a document against
-// the exact branch it belongs to and report precise errors.
 type Set struct {
 	raw      map[Name]any
 	compiled map[Name]*jsonschema.Schema
-	defs     map[string]*jsonschema.Schema // key: name + "#/$defs/" + def
+	defs     map[string]*jsonschema.Schema
 }
 
-// Load reads and compiles every embedded schema. A file whose $id does not
-// match its file name is an error, so one schema cannot shadow another.
 func Load() (*Set, error) {
 	files, err := fs.Glob(schemas.FS, "*.schema.json")
 	if err != nil {
@@ -92,14 +78,10 @@ func Load() (*Set, error) {
 	return set, nil
 }
 
-// Decode parses one JSON value the way Validate expects: numbers stay
-// json.Number, and trailing data after the value is an error.
 func Decode(r io.Reader) (any, error) {
 	return jsonschema.UnmarshalJSON(r)
 }
 
-// Validate checks a decoded instance against the named schema. A validation
-// failure is returned as *jsonschema.ValidationError.
 func (s *Set) Validate(name Name, instance any) error {
 	sch, ok := s.compiled[name]
 	if !ok {
@@ -108,8 +90,6 @@ func (s *Set) Validate(name Name, instance any) error {
 	return sch.Validate(instance)
 }
 
-// ValidateDef checks a decoded instance against one entry of a schema's
-// $defs, for example (SegmentRule, "city_list").
 func (s *Set) ValidateDef(name Name, def string, instance any) error {
 	sch, ok := s.defs[string(name)+"#/$defs/"+def]
 	if !ok {
@@ -118,10 +98,6 @@ func (s *Set) ValidateDef(name Name, def string, instance any) error {
 	return sch.Validate(instance)
 }
 
-// unsupportedForAPI lists keywords that Claude's structured outputs reject
-// (structured-outputs docs, "JSON Schema limitations"). Validate enforces them
-// locally instead. $schema and $id are not documented either way; they are
-// dropped to be safe. minItems is handled in reduce: only 0 and 1 are allowed.
 var unsupportedForAPI = map[string]bool{
 	"$schema":          true,
 	"$id":              true,
@@ -136,10 +112,6 @@ var unsupportedForAPI = map[string]bool{
 	"uniqueItems":      true,
 }
 
-// ForAPI returns a reduced copy of the named schema for structured outputs.
-// The stored schema is not modified. It is an error if the schema has an
-// external $ref (the API resolves internal refs only) or an
-// additionalProperties other than false.
 func (s *Set) ForAPI(name Name) (map[string]any, error) {
 	doc, ok := s.raw[name]
 	if !ok {
@@ -152,20 +124,17 @@ func (s *Set) ForAPI(name Name) (map[string]any, error) {
 	return out.(map[string]any), nil
 }
 
-// reduce walks a schema node. It knows which keywords hold sub-schemas, so a
-// property that happens to be named like a keyword (say "minimum") is kept.
-// The type assertions are safe: Load compiles every schema, and the compiler
-// validates it against the 2020-12 metaschema first.
 func reduce(node any, path string) (any, error) {
 	m, ok := node.(map[string]any)
 	if !ok {
-		return node, nil // boolean schema
+		return node, nil
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		p := path + "/" + k
 		switch {
 		case unsupportedForAPI[k]:
+			// Modelin reddettiği sözcükler burada düşer.
 			continue
 		case k == "minItems":
 			n, err := v.(json.Number).Int64()
@@ -215,15 +184,12 @@ func reduce(node any, path string) (any, error) {
 			}
 			out[k] = reduced
 		default:
-			// Data keywords (enum, const, required, type, description, ...)
-			// are copied unchanged. They hold no sub-schemas in our files.
 			out[k] = clone(v)
 		}
 	}
 	return out, nil
 }
 
-// clone deep-copies decoded JSON so ForAPI output never aliases the stored schema.
 func clone(v any) any {
 	switch t := v.(type) {
 	case map[string]any:

@@ -26,20 +26,15 @@ func TestRenderText(t *testing.T) {
 			RenderContext{FirstName: "Ali", LastName: "Kaya", City: "ankara", CampaignURL: testURL},
 			"Ali Kaya, Ankara: " + testURL},
 		{"no variables", "Sepetin seni bekliyor", RenderContext{}, "Sepetin seni bekliyor"},
-		// Seed edge row 4: an empty first name gets the fallback.
 		{"empty first name", "Merhaba {{first_name}}", RenderContext{}, "Merhaba " + FirstNameFallback},
 		{"blank first name", "Merhaba {{first_name}}", RenderContext{FirstName: "   "}, "Merhaba " + FirstNameFallback},
-		// Seed edge row 1: truncated to 20 characters, the render limit.
 		{"long name", "{{first_name}}", RenderContext{FirstName: seed.EdgeLongName}, "Muhammed Mustafa Abd"},
 		{"long Turkish name keeps whole letters", "{{first_name}}", RenderContext{FirstName: strings.Repeat("ş", 25)}, strings.Repeat("ş", 20)},
 		{"long last name", "{{last_name}}", RenderContext{LastName: strings.Repeat("y", 30)}, strings.Repeat("y", 20)},
-		// Seed edge row 2: a value is never parsed again.
 		{"template in a name", "Merhaba {{first_name}}", RenderContext{FirstName: seed.EdgeTemplateName}, "Merhaba {{first_name}}"},
 		{"other variable in a name", "{{first_name}}", RenderContext{FirstName: "{{city}}", City: "izmir"}, "{{city}}"},
 		{"url variable in a name", "{{first_name}}", RenderContext{FirstName: "{{campaign_url}}", CampaignURL: testURL}, "{{campaign_url}}"},
-		// Seed edge row 3: printed as is, it is just a name.
 		{"injection text", "{{first_name}}", RenderContext{FirstName: seed.EdgeInjectionName}, seed.EdgeInjectionName[:20]},
-		// Plain text is not HTML: an SMS shows the characters.
 		{"markup in an SMS", "{{first_name}}", RenderContext{FirstName: "<b>Tom & Jerry</b>"}, "<b>Tom & Jerry</b>"},
 		{"city slug to display name", "{{city}}", RenderContext{City: "istanbul"}, "İstanbul"},
 		{"city with Turkish letters", "{{city}}", RenderContext{City: "eskisehir"}, "Eskişehir"},
@@ -65,8 +60,6 @@ func TestFallbackFitsTheLimit(t *testing.T) {
 	}
 }
 
-// Every catalog city has a display name that fits the city limit, so the
-// validator's worst case holds.
 func TestEveryCityHasADisplayName(t *testing.T) {
 	for _, slug := range segment.EnumValues("city") {
 		got, err := RenderText("{{city}}", RenderContext{City: slug})
@@ -82,8 +75,6 @@ func TestEveryCityHasADisplayName(t *testing.T) {
 	}
 }
 
-// A template the parser rejects never renders. This is a second line behind
-// the validator: {{email}} cannot reach a recipient even if validation broke.
 func TestRenderRejectsInvalidTemplates(t *testing.T) {
 	for _, tmpl := range []string{"{{email}}", "{{password}}", "{{phone}}", "{{first_name", "a }} b", "{{first_name|upper}}"} {
 		if got, err := RenderText(tmpl, RenderContext{FirstName: "Ali"}); err == nil {
@@ -95,8 +86,6 @@ func TestRenderRejectsInvalidTemplates(t *testing.T) {
 	}
 }
 
-// Email HTML comes from the plain text through html/template, so markup in a
-// name is escaped, never run.
 func TestRenderEmailHTMLEscapes(t *testing.T) {
 	rc := RenderContext{FirstName: "<script>alert(1)</script>", LastName: "O'Brien & Co", CampaignURL: testURL}
 	got, err := RenderEmailHTML("Merhaba {{first_name}} {{last_name}}, indirim: {{campaign_url}}", rc)
@@ -126,9 +115,6 @@ func TestRenderEmailHTMLKeepsLiteralTemplateNames(t *testing.T) {
 	}
 }
 
-// The validator checks the worst case; truncation makes it hold at send
-// time. Render a validated, long SMS for every seed user and check the
-// limit, edge rows included.
 func TestRenderedSMSFitsForEverySeedUser(t *testing.T) {
 	set, err := schema.Load()
 	if err != nil {

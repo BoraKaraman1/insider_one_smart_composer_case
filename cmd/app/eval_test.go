@@ -31,9 +31,9 @@ func TestEvalCmdFailsClosed(t *testing.T) {
 	}
 }
 
-// LLM_MODE unset means mock: an in-process mockllm, a markdown report.
+// Kip boşsa süreç içi sahte model düz rapor yazar.
 func TestEvalCmdMock(t *testing.T) {
-	testdb.Fresh(t) // skips, or fails under REQUIRE_DB=1, like other integration tests
+	testdb.Fresh(t) // veritabanı yoksa atlar
 	tmpl := os.Getenv("TEST_TEMPLATE_DB")
 	if tmpl == "" {
 		tmpl = "app_template"

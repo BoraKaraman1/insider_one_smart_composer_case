@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// The demo brain answers when no reply is scripted. It reads the brief from
-// the first user turn and builds a rule and Turkish copy from keywords. It is
-// a demo, not a model: briefs it does not understand get a plain rule.
-
 var cities = []string{"istanbul", "ankara", "izmir", "bursa", "antalya", "adana", "konya", "gaziantep", "kocaeli", "eskisehir"}
 
 var (
@@ -25,8 +21,6 @@ var (
 		"didn't buy", "didn't purchase", "without purchas", "no purchase"}
 )
 
-// fold lowercases and drops Turkish diacritics, so İstanbul, ISTANBUL and
-// istanbul all match the slug.
 var fold = strings.NewReplacer("İ", "i", "I", "i", "ı", "i", "Ş", "s", "ş", "s", "Ğ", "g", "ğ", "g",
 	"Ü", "u", "ü", "u", "Ö", "o", "ö", "o", "Ç", "c", "ç", "c")
 

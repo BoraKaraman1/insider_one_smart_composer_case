@@ -12,8 +12,6 @@ const campaignUrl = ref('')
 const busy = ref(false)
 const issues = ref<Issue[]>([])
 
-// Create the campaign, then start its generation. The campaign page opens
-// the stream from the view's events_url.
 async function submit() {
   busy.value = true
   issues.value = []
@@ -22,7 +20,7 @@ async function submit() {
     try {
       await api.generate(v.campaign.id, v.campaign.version)
     } catch {
-      // The campaign exists as a draft; its page offers Generate again.
+      // Kampanya taslak kaldı, sayfası yeniden üretmeyi sunar.
     }
     await router.push(`/campaigns/${v.campaign.id}`)
   } catch (e) {

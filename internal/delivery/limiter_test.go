@@ -19,8 +19,6 @@ func TestLimiterSettings(t *testing.T) {
 	}
 }
 
-// The first check: x/time/rate must run on the bubble's fake clock, or the
-// big test below measures nothing. Two tokens are 10 ms apart, exactly.
 func TestLimiterRunsOnTheFakeClock(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := NewLimiter()
@@ -38,9 +36,6 @@ func TestLimiterRunsOnTheFakeClock(t *testing.T) {
 	})
 }
 
-// Rule 8: 500 goroutines hammer one limiter for 10 virtual seconds. No
-// half-open 1 s window may hold more than 100 calls, and the total must be
-// close to 1,000. With burst 100 a window could hold close to 200.
 func TestLimiterNeverExceeds100PerSecond(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := NewLimiter()
@@ -62,11 +57,8 @@ func TestLimiterNeverExceeds100PerSecond(t *testing.T) {
 					if !now.Before(end) {
 						return
 					}
-					// x/time/rate computes in float64 seconds, so a token can
-					// come 1 ns early (2.009999999 s instead of 2.01 s). That
-					// would put 101 calls in [1.01 s, 2.01 s). Rounding to the
-					// microsecond drops that drift and nothing else.
 					mu.Lock()
+					// Kayan nokta bir nanosaniye erken jeton verebiliyor, mikrosaniyeye yuvarlayınca kayboluyor.
 					calls = append(calls, now.Round(time.Microsecond))
 					mu.Unlock()
 				}
@@ -83,8 +75,6 @@ func TestLimiterNeverExceeds100PerSecond(t *testing.T) {
 	})
 }
 
-// maxInWindow is the most calls in any half-open window [t, t+d). The
-// densest window always starts at a call.
 func maxInWindow(times []time.Time, d time.Duration) int {
 	ts := slices.Clone(times)
 	slices.SortFunc(ts, func(a, b time.Time) int { return a.Compare(b) })
@@ -114,7 +104,7 @@ func TestMaxInWindow(t *testing.T) {
 		{nil, 0},
 		{at(0), 1},
 		{at(0, 999), 2},
-		{at(0, 1000), 1}, // half-open: 1000 ms is the next window
+		{at(0, 1000), 1},
 		{at(500, 0, 999, 1400), 3},
 	}
 	for _, c := range cases {
@@ -124,7 +114,6 @@ func TestMaxInWindow(t *testing.T) {
 	}
 }
 
-// Each channel has its own limiter: a busy SMS queue does not slow email.
 func TestLimitersArePerChannel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ls := NewLimiters()

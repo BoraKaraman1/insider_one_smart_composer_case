@@ -1,5 +1,3 @@
-// Plan 3, 1.5 (rules 4 and 9): no v-html anywhere in src/. Copy comes from
-// the model and from humans; it is rendered as text only.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -1,16 +1,3 @@
-// Plan 3, 1.4: the delivery polling contract, with fake timers.
-//
-// Contract assumed (src/composables/useDeliveryPolling.ts):
-//   PollingApi {
-//     getCampaign(id, signal): Promise<CampaignView>
-//     getStats(id, signal): Promise<{ channels: Record<string, Record<string, number>> }>
-//     getAttention(id, signal): Promise<AttentionItem[]>
-//   }
-//   useDeliveryPolling(id: Ref<string>, api: PollingApi, opts?: { onUnauthorized?: () => void }): {
-//     view, stats, attention, lastUpdated: Ref<number | null>, stale: Ref<boolean>, polling: Ref<boolean>
-//   }
-// The first tick runs at once. Cleanup is registered with onScopeDispose,
-// so stopping the effect scope (or unmounting) aborts the tick.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref } from 'vue'
 import { ApiError } from '../api/client'
@@ -35,7 +22,6 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
-// fakeApi answers from mutable state and records every call with its time.
 function fakeApi(state: { campaign: string; stats: ReturnType<typeof stats> }) {
   const calls: { fn: string; id: string; at: number; signal: AbortSignal }[] = []
   let inFlight = 0
@@ -95,11 +81,11 @@ describe('useDeliveryPolling', () => {
 
   it('never overlaps ticks: the next one starts 1 s after the previous finished', async () => {
     const f = fakeApi({ campaign: 'sending', stats: stats({ sending: 1 }) })
-    f.delays.campaign = 3000 // slower than the interval
+    f.delays.campaign = 3000 // Aralıktan uzun sürsün diye.
     const { scope } = start(f.api)
     await vi.advanceTimersByTimeAsync(20_000)
     scope.stop()
-    expect(f.maxInFlight()).toBeLessThanOrEqual(2) // stats and attention run together, never two ticks
+    expect(f.maxInFlight()).toBeLessThanOrEqual(2)
     const t = f.ticks().map((c) => c.at)
     expect(t.length).toBeGreaterThan(2)
     for (let i = 1; i < t.length; i++) expect(t[i] - t[i - 1]).toBe(3000 + 1000)
@@ -116,7 +102,6 @@ describe('useDeliveryPolling', () => {
     state.stats = stats({ sent: 1, skipped: 10 })
     const before = f.ticks().length
     await vi.advanceTimersByTimeAsync(10_000)
-    // The tick that first saw zero in flight, plus one final tick.
     expect(f.ticks().length - before).toBe(2)
     expect(p.polling.value).toBe(false)
     expect(p.stats.value).toEqual(stats({ sent: 1, skipped: 10 }))
@@ -138,7 +123,7 @@ describe('useDeliveryPolling', () => {
     const f = fakeApi({ campaign: 'completed', stats: stats({ sent: 3 }, { sent: 3 }) })
     const { p, scope } = start(f.api)
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(f.ticks().length).toBe(2) // first load, then one final tick
+    expect(f.ticks().length).toBe(2)
     expect(p.polling.value).toBe(false)
     scope.stop()
   })
@@ -164,7 +149,7 @@ describe('useDeliveryPolling', () => {
     expect(p.stale.value).toBe(false)
     const n = f.ticks().length
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(f.ticks().length).toBe(n + 1) // back to the 1 s interval
+    expect(f.ticks().length).toBe(n + 1)
     scope.stop()
   })
 

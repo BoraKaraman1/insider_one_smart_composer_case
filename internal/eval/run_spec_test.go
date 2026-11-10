@@ -19,28 +19,9 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// Plan 3, 2.1 and 2.6: one end-to-end run over scripted mockllm cases with
-// exact numbers, and the cloned database is gone afterwards, also after a
-// run that fails midway. Contract assumed:
-//
-//	Config{AdminURL, Template string; Cases []Case; Runs int;
-//	       LLM campaign.LLM; Mode string;
-//	       Sleep func(context.Context, time.Duration) error}
-//	Run(ctx, Config) (Report, error)
-//	Report{Mode, Model string; PromptVersions map[string]string;
-//	       Numbers Numbers; Cases []CaseResult;
-//	       Correct map[string]Tally; Injection map[InjectionOutcome]int;
-//	       GenerationP50MS, GenerationP95MS int}
-//	Tally{Correct, Total int}; CaseResult{Name string; Run int; Outcome string; Result Result}
-//
-// Run clones Template into a database named eval_<something>, drops it on
-// return (also on error), fixes Generator.Now to the clone's seed_meta.as_of
-// and runs the cases in order, sequentially.
-
-// adminURL is the test server's admin connection, as testdb uses it.
 func adminURL(t *testing.T) (string, string) {
 	t.Helper()
-	testdb.Fresh(t) // skips, or fails under REQUIRE_DB=1, exactly like the other integration tests
+	testdb.Fresh(t)
 	tmpl := os.Getenv("TEST_TEMPLATE_DB")
 	if tmpl == "" {
 		tmpl = "app_template"
@@ -121,14 +102,12 @@ func TestRunScripted(t *testing.T) {
 	admin, tmpl := adminURL(t)
 	before := evalDatabases(t, admin)
 	cl, m := mockClient(t)
-	// The mock takes scripted replies per stage in request order, so the
-	// cases run sequentially in the order given.
 	m.Script(mockllm.Segment,
-		mockllm.Reply{Text: abandonersRule},                               // valid
-		mockllm.Reply{Text: badRule}, mockllm.Reply{Text: abandonersRule}, // invalid then valid
-		mockllm.Status(529), mockllm.Reply{Text: abandonersRule}, // 529 then valid
-		mockllm.Refusal(),                   // refused
-		mockllm.Reply{Text: abandonersRule}, // injection, answered safely
+		mockllm.Reply{Text: abandonersRule},
+		mockllm.Reply{Text: badRule}, mockllm.Reply{Text: abandonersRule},
+		mockllm.Status(529), mockllm.Reply{Text: abandonersRule},
+		mockllm.Refusal(),
+		mockllm.Reply{Text: abandonersRule},
 	)
 	m.Script(mockllm.Content, slicesRepeat(mockllm.Reply{Text: scriptCopy}, 4)...)
 
@@ -149,7 +128,7 @@ func TestRunScripted(t *testing.T) {
 	checkStage(t, "segment", rep.Numbers.Stages["segment"], StageNumbers{
 		FirstAttemptValid: 3, ValidAfterRepair: 1, Failed: 1, ValidationAttempts: 6, Refusals: 1,
 		TransportRetries: map[string]int{"server_error": 1},
-		FailureCodes:     rep.Numbers.Stages["segment"].FailureCodes, // checked below
+		FailureCodes:     rep.Numbers.Stages["segment"].FailureCodes,
 		LatencyP50MS:     rep.Numbers.Stages["segment"].LatencyP50MS,
 		LatencyP95MS:     rep.Numbers.Stages["segment"].LatencyP95MS,
 	})
@@ -191,8 +170,6 @@ func TestRunScripted(t *testing.T) {
 	}
 }
 
-// cancelOn cancels the run's context on the nth model call, so Run fails
-// in the middle of its cases.
 type cancelOn struct {
 	campaign.LLM
 	n      int64
@@ -226,8 +203,6 @@ func TestRunDropsCloneOnFailure(t *testing.T) {
 	}
 }
 
-// A template without a seed_meta row stops the run before any case, so
-// "within 30 days" can never drift with the wall clock.
 func TestRunNeedsSeedMeta(t *testing.T) {
 	admin, _ := adminURL(t)
 	empty := testdb.Fresh(t)

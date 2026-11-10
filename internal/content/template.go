@@ -1,6 +1,4 @@
-// Package content validates campaign copy: the SMS body and the email
-// subject and body. Copy is plain text with {{ name }} variables from a fixed
-// allowlist; links come only from {{campaign_url}}.
+// Paket kısa ileti ve e-posta metnini doğrular.
 package content
 
 import (
@@ -12,10 +10,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// maxLen is the allowlist of template variables, with the most characters
-// (runes) each may render to. The renderer truncates values to this length,
-// so a worst-case length check made at validation time holds at send time.
-// Nothing security-critical or contact-related (email, phone) is here.
 var maxLen = map[string]int{
 	"first_name":   20,
 	"last_name":    20,
@@ -23,11 +17,9 @@ var maxLen = map[string]int{
 	"campaign_url": 40,
 }
 
-// mayBeNonGSM marks variables whose values can contain letters outside GSM-7,
-// such as ş, ğ and ı in Turkish names and city names.
+// Bu alanlar yedi bitlik alfabede olmayan harf taşıyabilir.
 var mayBeNonGSM = map[string]bool{"first_name": true, "last_name": true, "city": true}
 
-// Variables returns the allowlisted variable names, sorted.
 func Variables() []string {
 	names := make([]string, 0, len(maxLen))
 	for n := range maxLen {
@@ -37,16 +29,11 @@ func Variables() []string {
 	return names
 }
 
-// Part is one piece of a parsed template: literal text, or one variable.
 type Part struct {
-	Text string // literal text, when Var is empty
-	Var  string // variable name
+	Text string
+	Var  string
 }
 
-// Parse splits a template into parts. Only {{ name }} with an allowlisted
-// name is a variable. Unknown names, unclosed or stray braces, filters and
-// nesting are errors. The returned issues have an empty Path; the caller
-// knows which field it parsed.
 func Parse(tmpl string) ([]Part, []validation.Issue) {
 	var parts []Part
 	var issues []validation.Issue
@@ -110,8 +97,7 @@ func isIdent(s string) bool {
 	return true
 }
 
-// worstCase renders parts with every variable at its maximum length. With
-// turkish set, variables that may hold non-GSM letters are filled with ş.
+// Türkçe seçilince bu alanlar en geniş harfle doldurulur.
 func worstCase(parts []Part, turkish bool) string {
 	var b strings.Builder
 	for _, p := range parts {

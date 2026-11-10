@@ -20,8 +20,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// newServer runs the mock provider on its own empty database, as in compose
-// where it has a database of its own. Migrate creates its schema.
 func newServer(t *testing.T, cfg mockprovider.Config) *httptest.Server {
 	t.Helper()
 	ctx := context.Background()
@@ -50,7 +48,6 @@ type reply struct {
 	Err    error
 }
 
-// post sends one message. chaos sets X-Chaos when not empty.
 func post(t *testing.T, srv *httptest.Server, client *http.Client, key, chaos, body string) reply {
 	t.Helper()
 	req, err := http.NewRequest("POST", srv.URL+"/v1/messages", strings.NewReader(body))
@@ -102,7 +99,6 @@ func stats(t *testing.T, srv *httptest.Server) mockprovider.Stats {
 
 func chaosOn() mockprovider.Config { return mockprovider.Config{ChaosHeader: true} }
 
-// shortClient gives up quickly, like the worker's per-attempt timeout.
 func shortClient(srv *httptest.Server) *http.Client {
 	c := srv.Client()
 	c.Timeout = 300 * time.Millisecond
@@ -141,7 +137,6 @@ func TestSendAndReplay(t *testing.T) {
 	if first.Err != nil || first.Status != http.StatusAccepted || first.ID == "" {
 		t.Fatalf("first send: %+v", first)
 	}
-	// The same key and payload replays the stored response without sending.
 	again := post(t, srv, nil, "m-1", "", smsBody)
 	if again.Status != http.StatusAccepted || again.ID != first.ID {
 		t.Errorf("replay: %+v; want 202 with id %q", again, first.ID)
@@ -181,8 +176,6 @@ func TestRequestErrors(t *testing.T) {
 	}
 }
 
-// The same key with another payload is a client bug, not a retry. It gets
-// 422 and does not send.
 func TestSameKeyDifferentPayload(t *testing.T) {
 	srv := newServer(t, mockprovider.Config{})
 	if r := post(t, srv, nil, "m-1", "", smsBody); r.Status != http.StatusAccepted {
@@ -197,8 +190,6 @@ func TestSameKeyDifferentPayload(t *testing.T) {
 	}
 }
 
-// Concurrent requests with one key queue on a per-key advisory lock: one
-// sends, every other one waits and then replays.
 func TestConcurrentSameKeySendsOnce(t *testing.T) {
 	srv := newServer(t, mockprovider.Config{Latency: 20 * time.Millisecond, Seed: 1})
 	const n = 20
@@ -224,8 +215,6 @@ func TestConcurrentSameKeySendsOnce(t *testing.T) {
 	}
 }
 
-// Error answers happen before processing: nothing is stored, so the next
-// try with the same key is a fresh send, not a replay of the error.
 func TestErrorModesStoreNothing(t *testing.T) {
 	cfg := chaosOn()
 	cfg.RetryAfter = 2 * time.Second
@@ -266,8 +255,6 @@ func TestErrorModesStoreNothing(t *testing.T) {
 	}
 }
 
-// Hang before processing: the client gives up and nothing was sent. The
-// handler must return once the client is gone, or srv.Close blocks.
 func TestHangSendsNothing(t *testing.T) {
 	srv := newServer(t, chaosOn())
 	r := post(t, srv, shortClient(srv), "m-1", "hang", smsBody)
@@ -286,8 +273,6 @@ func TestHangSendsNothing(t *testing.T) {
 	}
 }
 
-// Drop: the send is recorded, then the connection is closed with no answer.
-// This is the ambiguous case of rule 10. The retry gets the replay.
 func TestDropRecordsTheSend(t *testing.T) {
 	srv := newServer(t, chaosOn())
 	r := post(t, srv, nil, "m-1", "drop", smsBody)
@@ -307,8 +292,6 @@ func TestDropRecordsTheSend(t *testing.T) {
 	}
 }
 
-// Late: the send is recorded, then the answer comes after the client gave
-// up. The retry gets the replay.
 func TestLateAnswerRecordsTheSend(t *testing.T) {
 	srv := newServer(t, chaosOn())
 	r := post(t, srv, shortClient(srv), "m-1", "late", smsBody)
@@ -324,8 +307,6 @@ func TestLateAnswerRecordsTheSend(t *testing.T) {
 	}
 }
 
-// X-Chaos is a test hook. Without MOCKPROVIDER_CHAOS_HEADER=true it is
-// ignored, so a caller cannot steer a deployed mock.
 func TestChaosHeaderIgnoredWhenOff(t *testing.T) {
 	srv := newServer(t, mockprovider.Config{})
 	if r := post(t, srv, nil, "m-1", "503", smsBody); r.Status != http.StatusAccepted {
@@ -340,8 +321,6 @@ func TestUnknownChaosValue(t *testing.T) {
 	}
 }
 
-// The random chaos is seeded: the same seed and rates give the same
-// sequence, and the observed share is near the configured rate.
 func TestSeededChaosIsDeterministic(t *testing.T) {
 	cfg := mockprovider.Config{Seed: 42, Rate503: 0.3, Rate429: 0.2, RetryAfter: time.Second}
 	run := func() []int {
@@ -361,7 +340,6 @@ func TestSeededChaosIsDeterministic(t *testing.T) {
 	for _, c := range a {
 		count[c]++
 	}
-	// 200 draws: 60 expected 503s and 40 expected 429s, with wide bounds.
 	if count[503] < 35 || count[503] > 85 || count[429] < 20 || count[429] > 60 {
 		t.Errorf("outcome counts %v far from the configured rates", count)
 	}
@@ -370,8 +348,6 @@ func TestSeededChaosIsDeterministic(t *testing.T) {
 	}
 }
 
-// Stats keep every request's receive time per channel, failed ones too: the
-// rate limit test needs every provider call.
 func TestStatsReceiveTimes(t *testing.T) {
 	srv := newServer(t, chaosOn())
 	before := time.Now()

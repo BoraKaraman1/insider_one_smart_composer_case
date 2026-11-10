@@ -14,10 +14,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// Plan 3, 3.3. The app image is distroless, so compose healthchecks run
-// "app healthcheck <url>": one GET with a 2 s timeout, exit 0 on 200, else
-// 1. healthcheckCmd(args) returns the exit code; a missing URL is a usage
-// error, 2.
 func TestHealthcheckExitCodes(t *testing.T) {
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -72,9 +68,7 @@ func TestHealthcheckExitCodes(t *testing.T) {
 	}
 }
 
-// The worker serves /healthz, /readyz and /metrics on WORKER_METRICS_ADDR.
-// /readyz is 200 once River has started and the database answers, and
-// stops being 200 when the worker stops.
+// İşçi durunca hazır ucu artık iki yüz dönmez.
 func TestWorkerHealthAndMetrics(t *testing.T) {
 	url, _ := testdb.Seeded(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

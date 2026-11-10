@@ -1,5 +1,4 @@
-// Package store owns all SQL that is not compiled from a segment rule, and
-// the migration runner.
+// Paket segment derlemesi dışındaki sorguları ve göç koşucusunu tutar.
 package store
 
 import (
@@ -18,13 +17,9 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/migrations"
 )
 
-// riverLock serializes River migrations across concurrent runs, like the
-// goose session lock does for the app migrations.
+// Eşzamanlı göçleri sıraya sokar.
 const riverLock int64 = 0x717e7
 
-// newMigrator builds a goose provider over the embedded migrations. A
-// Postgres advisory lock makes concurrent runs (compose setup, tests) wait
-// for each other instead of racing.
 func newMigrator(db *sql.DB) (*goose.Provider, error) {
 	locker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
@@ -33,14 +28,10 @@ func newMigrator(db *sql.DB) (*goose.Provider, error) {
 	return goose.NewProvider(goose.DialectPostgres, db, migrations.FS, goose.WithSessionLocker(locker))
 }
 
-// newRiverMigrator builds a River migrator. The driver has no pool, so only
-// the Tx variants work; callers pass a transaction on db's connection.
 func newRiverMigrator() (*rivermigrate.Migrator[pgx.Tx], error) {
 	return rivermigrate.New(riverpgxv5.New(nil), &rivermigrate.Config{Logger: slog.New(slog.DiscardHandler)})
 }
 
-// inTx runs fn in a transaction on one pgx connection taken from db, and
-// commits if fn succeeds.
 func inTx(ctx context.Context, db *sql.DB, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -60,8 +51,7 @@ func inTx(ctx context.Context, db *sql.DB, opts pgx.TxOptions, fn func(pgx.Tx) e
 	})
 }
 
-// Migrate applies every pending migration: the app's (goose), then River's
-// queue tables (rivermigrate). It does not close db.
+// Önce uygulama tabloları, sonra kuyruk tabloları uygulanır ve bağlantı kapanmaz.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	p, err := newMigrator(db)
 	if err != nil {
@@ -78,7 +68,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", riverLock); err != nil {
 			return err
 		}
-		//lint:ignore SA1019 the advisory lock in this transaction has to cover the migration
+		//lint:ignore SA1019 kilit bu işlem içinde göçü de kapsamalı
 		_, err := rm.MigrateTx(ctx, tx, rivermigrate.DirectionUp, nil)
 		return err
 	})
@@ -88,8 +78,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// Pending reports whether db lacks any embedded migration or any River
-// migration (for /readyz). It only reads, so it takes no lock.
+// Eksik göç var mı diye bakar ve yalnızca okur.
 func Pending(ctx context.Context, db *sql.DB) (bool, error) {
 	p, err := goose.NewProvider(goose.DialectPostgres, db, migrations.FS)
 	if err != nil {

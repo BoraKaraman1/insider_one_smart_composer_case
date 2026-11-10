@@ -1,18 +1,3 @@
-// Plan 3, 1.3: the edit contract. useDraft owns the unsaved text; campaign
-// reloads never write into it, and a 409 keeps it.
-//
-// Contract assumed (src/composables/useDraft.ts, src/api/client.ts):
-//   class ApiError extends Error { status: number; issues: Issue[] }
-//   useDraft(): {
-//     draft: Ref<{ sms: string; subject: string; body: string } | null>
-//     dirty: ComputedRef<boolean>; conflict: Ref<boolean>; issues: Ref<IssueMap | null>
-//     start(view): void       fills the draft only when it is empty
-//     observe(view): void     every campaign reload; never touches the draft
-//     body(): RevisionRequest
-//     save(post: (body) => Promise<CampaignView>): Promise<'saved' | 'conflict' | 'invalid'>
-//     rebase(latest): void    "Save on top of latest": new base, same text
-//     useLatest(latest): void "Use latest": discard the draft
-//   }
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import { ApiError } from '../api/client'

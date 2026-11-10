@@ -18,7 +18,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
 )
 
-// insertOnlyClient is a River client that only inserts jobs, like the api's.
 func insertOnlyClient(t *testing.T, p *pgxpool.Pool) *river.Client[pgx.Tx] {
 	t.Helper()
 	c, err := river.NewClient(riverpgxv5.New(p), &river.Config{})
@@ -40,7 +39,6 @@ func fanoutJob(campaignID string) *river.Job[jobs.FanoutArgs] {
 	}
 }
 
-// expectedAudience runs the compiler's recipient query, consent included.
 func expectedAudience(t *testing.T, p *pgxpool.Pool, channel string, asOf time.Time) map[string]bool {
 	t.Helper()
 	set, err := schema.Load()
@@ -90,7 +88,6 @@ func messagesOf(t *testing.T, p *pgxpool.Pool, campaignID string) []fanoutRow {
 	return out
 }
 
-// sendJobs maps each send job's message id to its queues (one entry per job).
 func sendJobs(t *testing.T, p *pgxpool.Pool) map[string][]string {
 	t.Helper()
 	rows, err := p.Query(context.Background(), `SELECT args->>'message_id', queue FROM river_job WHERE kind = $1`, jobs.SendArgs{}.Kind())
@@ -112,9 +109,6 @@ func sendJobs(t *testing.T, p *pgxpool.Pool) map[string][]string {
 	return out
 }
 
-// Fan-out creates one queued message per consenting recipient per channel,
-// one send job per message on the channel's queue, and moves the campaign
-// to sending, all at once.
 func TestFanout(t *testing.T) {
 	p, meta := appPool(t)
 	c := insertCampaignIn(t, p, "approved", 2)
@@ -139,7 +133,6 @@ func TestFanout(t *testing.T) {
 			t.Errorf("%s recipients: %d, want the %d the compiler selects", ch, len(got[ch]), len(want))
 		}
 	}
-	// Seed 42: 210 of the 315 matches have SMS consent (docs/seed-data.md).
 	if len(got["sms"]) != 210 {
 		t.Errorf("%d SMS messages, want 210", len(got["sms"]))
 	}
@@ -161,9 +154,6 @@ func TestFanout(t *testing.T) {
 	}
 }
 
-// River runs a job at least once. A second fan-out changes nothing: no new
-// message, no new job, no second transition, and no error that would make
-// River retry it forever.
 func TestFanoutTwiceChangesNothing(t *testing.T) {
 	p, meta := appPool(t)
 	c := insertCampaignIn(t, p, "approved", 2)
@@ -191,8 +181,6 @@ func TestFanoutTwiceChangesNothing(t *testing.T) {
 	}
 }
 
-// Consent was revoked after approve, so fan-out inserts no message. No send
-// job will ever run the completion check, so fan-out completes the campaign.
 func TestFanoutWithNoRecipientsCompletes(t *testing.T) {
 	p, meta := appPool(t)
 	c := insertCampaignIn(t, p, "approved", 2)
@@ -213,7 +201,6 @@ func TestFanoutWithNoRecipientsCompletes(t *testing.T) {
 	}
 }
 
-// A fan-out job for a campaign that was cancelled before it ran does nothing.
 func TestFanoutOfCancelledCampaign(t *testing.T) {
 	p, meta := appPool(t)
 	c := insertCampaignIn(t, p, "cancelled", 3)

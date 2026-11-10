@@ -10,9 +10,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
 )
 
-// The system prompt is what the model knows about the catalog and the
-// limits. If a city, event or variable is missing here, the model cannot
-// propose it; if the prompt changes per call, caching breaks.
 func TestSystemPrompts(t *testing.T) {
 	seg, cont := SystemPrompt(Segment), SystemPrompt(Content)
 	if seg == "" || cont == "" || seg == cont {
@@ -43,7 +40,6 @@ func TestSystemPrompts(t *testing.T) {
 			t.Errorf("content prompt does not state the limit %d", limit)
 		}
 	}
-	// Recipient data never reaches the model, and neither do contact fields.
 	for _, p := range []string{seg, cont} {
 		for _, banned := range []string{"@example.com", "+90 000", "consent_sms", "consent_email"} {
 			if strings.Contains(p, banned) {
@@ -53,8 +49,6 @@ func TestSystemPrompts(t *testing.T) {
 	}
 }
 
-// prompt_version is stored on every llm_calls row, so a change in output
-// quality can be traced to a prompt change.
 func TestPromptVersion(t *testing.T) {
 	s, c := PromptVersion(Segment), PromptVersion(Content)
 	if s == "" || c == "" || s == c {
@@ -65,12 +59,8 @@ func TestPromptVersion(t *testing.T) {
 	}
 }
 
-// tagRe finds anything that a model could read as a brief tag, in any case
-// and with spaces.
 var tagRe = regexp.MustCompile(`(?i)<\s*/?\s*brief\b[^>]*>`)
 
-// The brief is untrusted data inside <brief> tags. A brief cannot close the
-// tag early or open a second one (rule 4).
 func TestBriefIsWrappedAndEscaped(t *testing.T) {
 	turns := map[string]func(string) string{
 		"segment": SegmentTurn,
@@ -106,8 +96,6 @@ func TestBriefIsWrappedAndEscaped(t *testing.T) {
 	}
 }
 
-// checkTags requires exactly the wrapper's own tags: one opening tag before
-// the brief and one closing tag after it.
 func checkTags(t *testing.T, name, out string) {
 	t.Helper()
 	tags := tagRe.FindAllStringIndex(out, -1)

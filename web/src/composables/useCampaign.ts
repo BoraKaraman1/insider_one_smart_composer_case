@@ -1,6 +1,3 @@
-// The campaign view of one page, and the actions on it. A 409 on any action
-// reloads the view and says what changed; it never touches a draft.
-
 import { ref, type Ref } from 'vue'
 import { ApiError } from '../api/client'
 import type { Api } from '../api/client'
@@ -22,8 +19,6 @@ export function useCampaign(id: Ref<string>, api: Api) {
     return view.value
   }
 
-  // act runs one action. On success the answer is the new view (or the
-  // caller reloads); on 409 the view is reloaded and a notice says why.
   async function act<T>(name: string, fn: () => Promise<T>): Promise<T | null> {
     busy.value = true
     notice.value = null

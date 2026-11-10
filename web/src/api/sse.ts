@@ -1,7 +1,3 @@
-// A fetch-based SSE reader. EventSource cannot send an Authorization
-// header, and the token must never be in a URL, so the stream is read with
-// fetch and parsed here.
-
 import { errorFrom } from './client'
 
 export interface SSEMessage {
@@ -10,12 +6,9 @@ export interface SSEMessage {
   data: string
 }
 
-// createSSEParser parses the text/event-stream format from raw chunks split
-// anywhere. Lines end in LF, CRLF or CR. Comment lines go to onComment. An
-// event cut off before its blank line is dropped at end().
 export function createSSEParser(onMessage: (m: SSEMessage) => void, onComment?: (text: string) => void) {
   let buf = ''
-  let skipLF = false // the last chunk ended in CR; a leading LF belongs to it
+  let skipLF = false // Son parça CR ile bitti, baştaki LF ona ait.
   let id: string | null = null
   let event = ''
   let data: string[] = []
@@ -79,10 +72,6 @@ export interface StreamOptions {
   onComment?: (text: string) => void
 }
 
-// openEventStream reads one connection to its end. It resolves 'ended' when
-// the server closed the stream and 'aborted' when the signal fired. A non-2xx
-// answer rejects with an ApiError; a dropped connection rejects with the
-// network error, so the caller can reconnect.
 export async function openEventStream(url: string, opts: StreamOptions): Promise<'ended' | 'aborted'> {
   const doFetch = opts.fetch ?? ((input, init) => fetch(input, init))
   const headers: Record<string, string> = { Authorization: `Bearer ${opts.token}`, Accept: 'text/event-stream' }

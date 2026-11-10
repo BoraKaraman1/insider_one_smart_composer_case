@@ -1,10 +1,6 @@
--- Recipients and their events: the data a segment rule selects from.
--- Every catalog column is NOT NULL, so neq / not_in never meet SQL's
--- three-valued logic (docs/segment-rules.md, Semantics). The CHECK lists
--- repeat the Go catalog (internal/segment/catalog.go); a test fails if they
--- drift apart. No password, token or secret columns exist anywhere (rule 9).
 
 -- +goose Up
+-- Katalog sütunları boş olamaz ki eşitsizlik üç değerli mantığa düşmesin.
 CREATE TABLE users (
     id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     first_name    text        NOT NULL DEFAULT '',
@@ -27,10 +23,8 @@ CREATE TABLE user_events (
     occurred_at timestamptz NOT NULL
 );
 
--- Serves the EXISTS / NOT EXISTS subqueries the compiler emits.
 CREATE INDEX user_events_user_type_time ON user_events (user_id, type, occurred_at);
 
--- The seed's time anchor (docs/seed-data.md). One row at most.
 CREATE TABLE seed_meta (
     id         boolean     PRIMARY KEY DEFAULT true CHECK (id),
     as_of      timestamptz NOT NULL,

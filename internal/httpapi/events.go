@@ -15,21 +15,18 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// Defaults of the event stream.
 const (
 	DefaultHeartbeat    = 15 * time.Second
-	DefaultPollInterval = time.Second // covers a missed notification
+	DefaultPollInterval = time.Second
 )
 
-// Hub fans out generation event notifications. One LISTEN connection per
-// api process feeds it, so streams do not each hold a database connection.
+// Süreç başına bir dinleme bağlantısı vardır ki her akış kendi bağlantısını tutmasın.
 type Hub struct {
 	mu   sync.Mutex
 	subs map[string]map[chan struct{}]struct{}
 }
 
-// NewHub starts listening on pool until ctx ends. A lost connection is
-// reopened after a pause; streams also poll, so nothing is lost meanwhile.
+// Kopan bağlantı bekleyip yeniden açılır ve arada yoklama boşluğu kapatır.
 func NewHub(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) *Hub {
 	h := &Hub{subs: map[string]map[chan struct{}]struct{}{}}
 	go h.listen(ctx, pool, log)
@@ -56,7 +53,7 @@ func (h *Hub) listenOnce(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
-	// The connection is in LISTEN state; never hand it back to the pool.
+	// Bağlantı dinlemede olduğu için havuza dönmez.
 	conn := pc.Hijack()
 	defer conn.Close(context.WithoutCancel(ctx))
 	if _, err := conn.Exec(ctx, "LISTEN "+store.GenerationEventsChannel); err != nil {
@@ -77,13 +74,11 @@ func (h *Hub) notify(campaignID string) {
 	for ch := range h.subs[campaignID] {
 		select {
 		case ch <- struct{}{}:
-		default: // a wake-up is already pending
+		default:
 		}
 	}
 }
 
-// Subscribe returns a channel that is signalled when the campaign may have
-// new events, and a function to unsubscribe.
 func (h *Hub) Subscribe(campaignID string) (<-chan struct{}, func()) {
 	ch := make(chan struct{}, 1)
 	h.mu.Lock()
@@ -112,11 +107,7 @@ func parseEventID(s string) (int64, error) {
 	return n, nil
 }
 
-// events streams a campaign's generation events as SSE: the stored backlog
-// after Last-Event-ID (or ?after=), then live events, with heartbeat
-// comments. It ends after a done or failed event. The token comes only from
-// the Authorization header, so the browser reads this with fetch, not
-// EventSource.
+// Jeton yalnızca yetki başlığından gelir.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	var after int64
 	for _, raw := range []string{r.URL.Query().Get("after"), r.Header.Get("Last-Event-ID")} {
@@ -147,7 +138,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 		wake = ch
 	}
 	rc := http.NewResponseController(w)
-	// The server's WriteTimeout would cut a long stream.
+	// Sunucunun yazma süresi uzun akışı keserdi.
 	_ = rc.SetWriteDeadline(time.Time{})
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -169,7 +160,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, id string) {
 	defer hb.Stop()
 	defer pt.Stop()
 
-	// send writes every new event and reports whether the stream is over.
 	send := func() (bool, error) {
 		ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
 		defer cancel()

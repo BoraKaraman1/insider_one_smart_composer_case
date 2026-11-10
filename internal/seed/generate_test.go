@@ -34,8 +34,6 @@ func TestDeterministic(t *testing.T) {
 	}
 }
 
-// TestAnchorIndependent: the same seed at another anchor gives the same data
-// shifted in time, so counts measured from asOf never drift.
 func TestAnchorIndependent(t *testing.T) {
 	a := mustGenerate(t, 42, fixedAsOf, 2000)
 	later := fixedAsOf.Add(97*24*time.Hour + 13*time.Hour + 1234*time.Microsecond)
@@ -156,9 +154,6 @@ func TestEdgeRows(t *testing.T) {
 	}
 }
 
-// exampleCounts evaluates docs/examples/istanbul_cart_abandoners.json with the
-// v1 semantics: city = istanbul, a cart_add with asOf-30d <= t <= asOf, and no
-// purchase in that window. sms counts those with SMS consent.
 func exampleCounts(ds Dataset) (total, sms int) {
 	from := ds.AsOf.Add(-30 * 24 * time.Hour)
 	in := func(t time.Time) bool { return !t.Before(from) && !t.After(ds.AsOf) }
@@ -182,9 +177,6 @@ func exampleCounts(ds Dataset) (total, sms int) {
 	return total, sms
 }
 
-// missedAbandoners counts Istanbul users whose last cart add in the window
-// has no purchase after it, but who bought earlier in the window. They are
-// real abandoners that the v1 rule excludes (docs/segment-rules.md).
 func missedAbandoners(ds Dataset) int {
 	from := ds.AsOf.Add(-30 * 24 * time.Hour)
 	lastCart := map[[16]byte]time.Time{}
@@ -222,7 +214,6 @@ func missedAbandoners(ds Dataset) int {
 	return n
 }
 
-// The numbers in docs/seed-data.md. If the generator changes, update both.
 const (
 	docUsers        = 5000
 	docEvents       = 56765

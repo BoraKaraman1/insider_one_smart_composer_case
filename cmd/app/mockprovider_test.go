@@ -24,7 +24,6 @@ func TestMockproviderNeedsItsOwnDatabase(t *testing.T) {
 	}
 }
 
-// The subcommand migrates its database and serves the provider.
 func TestMockproviderServes(t *testing.T) {
 	srv, cleanup, err := newMockprovider(context.Background(), env(map[string]string{"MOCKPROVIDER_DATABASE_URL": testdb.Fresh(t)}))
 	if err != nil {

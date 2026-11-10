@@ -29,8 +29,6 @@ func TestSendWorkerTimeout(t *testing.T) {
 	}
 }
 
-// The happy path: one token, one request with the message id as the
-// idempotency key, the rendered copy, and a sent row with the provider id.
 func TestSendDeliversRenderedMessage(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -92,7 +90,6 @@ func TestSendDeliversRenderedMessage(t *testing.T) {
 	if e.tokens["sms"].n.Load() != 1 || e.tokens["email"].n.Load() != 1 {
 		t.Error("a message took its token from the other channel's limiter")
 	}
-	// No contact data or copy in the logs.
 	for _, secret := range []string{phone, email, wantSMS, wantSubject} {
 		if strings.Contains(e.logs.String(), secret) {
 			t.Errorf("logs contain %q", secret)
@@ -100,8 +97,6 @@ func TestSendDeliversRenderedMessage(t *testing.T) {
 	}
 }
 
-// Rule 6 and rule 8: a 5xx is retried, each attempt takes its own token,
-// and the provider sends once.
 func TestServerErrorThenOK(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -138,7 +133,6 @@ func TestServerErrorThenOK(t *testing.T) {
 	}
 }
 
-// Retry-After wins over backoff, and the snooze is exactly that long.
 func TestRateLimitedHonorsRetryAfter(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{RetryAfter: 2 * time.Second})
 	c := insertSendingCampaign(t, e.pool)
@@ -167,7 +161,6 @@ func TestRateLimitedHonorsRetryAfter(t *testing.T) {
 	}
 }
 
-// Rule 6: a 4xx other than 408 and 429 is never retried.
 func TestClientErrorFailsWithoutRetry(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -190,7 +183,6 @@ func TestClientErrorFailsWithoutRetry(t *testing.T) {
 	}
 }
 
-// Always 503: the message is dead after MaxAttempts provider calls.
 func TestAlwaysFailingIsDeadAfterSixAttempts(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -218,7 +210,6 @@ func TestAlwaysFailingIsDeadAfterSixAttempts(t *testing.T) {
 	if e.tokensTaken() != MaxAttempts {
 		t.Errorf("%d tokens for %d provider calls", e.tokensTaken(), MaxAttempts)
 	}
-	// A dead message's job does not come back.
 	if _, ok := snoozed(err); ok {
 		t.Errorf("the last run snoozed: %v", err)
 	}
@@ -230,8 +221,6 @@ func TestAlwaysFailingIsDeadAfterSixAttempts(t *testing.T) {
 	}
 }
 
-// A message is also dead 15 minutes after its first attempt, whatever the
-// attempt count.
 func TestDeadAfterMaxAge(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -262,14 +251,11 @@ func TestDeadAfterMaxAge(t *testing.T) {
 	if m := loadMessage(t, e.pool, young); m.State != "queued" {
 		t.Errorf("young message: %+v; want queued", m)
 	}
-	// first_attempt_at is set once and never moved.
 	if m := loadMessage(t, e.pool, young); m.FirstAttemptAt == nil || !m.FirstAttemptAt.Equal(e.now.Add(-14*time.Minute)) {
 		t.Errorf("first_attempt_at moved: %+v", m)
 	}
 }
 
-// Consent is checked again at send time, per channel, before a token is
-// taken.
 func TestConsentRevokedBeforeSending(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -289,7 +275,6 @@ func TestConsentRevokedBeforeSending(t *testing.T) {
 	if n := len(e.prov.callsFor(sms)); n != 0 || e.tokens["sms"].n.Load() != 0 {
 		t.Errorf("sms without consent: %d requests, %d tokens; want none", n, e.tokens["sms"].n.Load())
 	}
-	// Email consent is untouched, so that message still goes out.
 	if err := e.work(email); err != nil {
 		t.Fatalf("email: %v", err)
 	}
@@ -298,8 +283,6 @@ func TestConsentRevokedBeforeSending(t *testing.T) {
 	}
 }
 
-// A cancelled campaign sends nothing more, even for a message that cancel
-// did not catch.
 func TestCancelledCampaignSkips(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -318,7 +301,6 @@ func TestCancelledCampaignSkips(t *testing.T) {
 	}
 }
 
-// Step 1: a message in a terminal state is never sent again.
 func TestTerminalMessagesAreLeftAlone(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -345,8 +327,6 @@ func TestTerminalMessagesAreLeftAlone(t *testing.T) {
 	}
 }
 
-// Every update is guarded by its predecessors. If someone else finishes the
-// message while our call is in flight, our late "sent" does not overwrite it.
 func TestSentUpdateIsGuarded(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -365,8 +345,6 @@ func TestSentUpdateIsGuarded(t *testing.T) {
 	}
 }
 
-// Retryable outcomes keep their own reason labels: refused is safe, reset
-// and timeout are ambiguous (docs/ARCHITECTURE.md section 7).
 func TestRetryableReasons(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -389,7 +367,6 @@ func TestRetryableReasons(t *testing.T) {
 	}
 }
 
-// Nothing listening: conn_refused, retried.
 func TestProviderDown(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	e.prov.srv.Close()
@@ -406,11 +383,10 @@ func TestProviderDown(t *testing.T) {
 	}
 }
 
-// After the last terminal update the campaign completes, once.
 func TestCampaignCompletion(t *testing.T) {
 	cases := []struct {
 		name   string
-		second string // forced outcome of the second message
+		second string
 		want   string
 	}{
 		{"all sent", "ok", "completed"},
@@ -438,7 +414,6 @@ func TestCampaignCompletion(t *testing.T) {
 			if state != cs.want || version != 4 {
 				t.Errorf("campaign %s version %d; want %s version 4", state, version, cs.want)
 			}
-			// A duplicate run of a finished job does not complete it again.
 			if err := e.work(a); err != nil {
 				t.Fatal(err)
 			}
@@ -450,8 +425,6 @@ func TestCampaignCompletion(t *testing.T) {
 	}
 }
 
-// Skipped messages are not failures: a campaign whose last message lost its
-// consent completes normally.
 func TestCompletionCountsSkippedAsDone(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -468,8 +441,6 @@ func TestCompletionCountsSkippedAsDone(t *testing.T) {
 	}
 }
 
-// A message whose id does not exist is a bug upstream; the job must not
-// retry it forever.
 func TestUnknownMessage(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	err := e.work("00000000-0000-4000-8000-00000000dead")
@@ -481,7 +452,6 @@ func TestUnknownMessage(t *testing.T) {
 	}
 }
 
-// hookLimiter runs a hook while the worker waits for its token.
 type hookLimiter struct{ during func() }
 
 func (h hookLimiter) Wait(ctx context.Context) error {
@@ -489,8 +459,6 @@ func (h hookLimiter) Wait(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// F1: consent revoked while the worker waits for its token stops the send.
-// The claim, after the token, is the dispatch cutoff.
 func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -516,7 +484,6 @@ func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
 	}
 }
 
-// The same cutoff holds for a campaign cancelled during the wait.
 func TestCancelledWhileWaitingForToken(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)
@@ -538,8 +505,6 @@ func TestCancelledWhileWaitingForToken(t *testing.T) {
 	}
 }
 
-// failFirstBegin is the app database, except that its first transaction
-// fails. The send worker's first transaction is the completion check.
 type failFirstBegin struct {
 	*pgxpool.Pool
 	failed atomic.Bool
@@ -552,9 +517,6 @@ func (d *failFirstBegin) Begin(ctx context.Context) (pgx.Tx, error) {
 	return d.Pool.Begin(ctx)
 }
 
-// F2: the message is sent but the completion check fails. The job's retry
-// finds a terminal message and still completes the campaign, without a
-// second provider call.
 func TestCompletionRetriedAfterTerminalUpdate(t *testing.T) {
 	e := newSendEnv(t, mockprovider.Config{})
 	c := insertSendingCampaign(t, e.pool)

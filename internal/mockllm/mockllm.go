@@ -1,13 +1,4 @@
-// Package mockllm is an HTTP fake of the Messages API (POST /v1/messages).
-// It is used through the real SDK via its base URL: in-process in tests, and
-// as a compose service in mock mode, so the stack runs without a key.
-//
-// It speaks the real SSE event sequence, answers non-streamed requests too,
-// and answers 400 to request shapes the real API rejects, so drift in our
-// requests fails tests here and not in production. Tests script its replies;
-// without a script, a small demo brain answers from brief keywords.
-//
-// It imports no app package and never sees recipient data.
+// Paket mesaj arayüzünün sahte sunucusudur.
 package mockllm
 
 import (
@@ -23,8 +14,6 @@ import (
 	"unicode/utf8"
 )
 
-// Stage is which generation stage a request belongs to. The mock reads it
-// from the output schema: the content schema has an "sms" property.
 type Stage string
 
 const (
@@ -32,17 +21,10 @@ const (
 	Content Stage = "content"
 )
 
-// Options configure the demo brain.
 type Options struct {
-	// InvalidFirst makes the brain's first answer of every conversation
-	// invalid, to show the repair loop in a demo (MOCKLLM_INVALID_FIRST).
 	InvalidFirst bool
 }
 
-// Reply is one scripted answer. With Status set, the reply is an API error
-// of that status. Otherwise Text streams with StopReason (default
-// end_turn). With Stall set, the stream sends part of Text and then hangs
-// until the client gives up.
 type Reply struct {
 	Text       string
 	StopReason string
@@ -51,29 +33,22 @@ type Reply struct {
 	Stall      bool
 }
 
-// Status is an API error reply.
 func Status(code int) Reply { return Reply{Status: code} }
 
-// RateLimited is a 429 with a Retry-After header ("" sends none).
 func RateLimited(retryAfter string) Reply { return Reply{Status: 429, RetryAfter: retryAfter} }
 
-// Refusal is a reply that stops with stop_reason refusal.
 func Refusal() Reply { return Reply{StopReason: "refusal"} }
 
-// MaxTokens is a reply cut off by max_tokens after text.
 func MaxTokens(text string) Reply { return Reply{Text: text, StopReason: "max_tokens"} }
 
-// Stall sends text and then no more events.
 func Stall(text string) Reply { return Reply{Text: text, Stall: true} }
 
-// Request is one received request, as sent.
 type Request struct {
 	Stage  Stage
 	Header http.Header
 	Body   []byte
 }
 
-// Server is the fake. It is safe for concurrent use.
 type Server struct {
 	opts Options
 
@@ -83,20 +58,16 @@ type Server struct {
 	seq      int
 }
 
-// New returns a server with an empty script.
 func New(o Options) *Server {
 	return &Server{opts: o, scripts: map[Stage][]Reply{}}
 }
 
-// Script queues replies for a stage. Each request of that stage takes the
-// next one; when none is left, the demo brain answers.
 func (s *Server) Script(stage Stage, replies ...Reply) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scripts[stage] = append(s.scripts[stage], replies...)
 }
 
-// Requests returns a copy of every request received, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -193,11 +164,9 @@ func stageOf(body map[string]any) Stage {
 	return Segment
 }
 
-// unsupported are the schema keywords structured outputs reject.
 var unsupported = []string{"minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum",
 	"exclusiveMaximum", "multipleOf", "maxItems", "uniqueItems"}
 
-// checkRequest returns why the real API would reject the body, or "".
 func checkRequest(body map[string]any) string {
 	for _, k := range []string{"temperature", "top_p", "top_k"} {
 		if _, ok := body[k]; ok {
@@ -259,8 +228,8 @@ func checkSchema(node any, path string) string {
 				return path + ": additionalProperties must be false for every object"
 			}
 		}
-		// Properties are names, not keywords: walk their values only.
 		for k, v := range n {
+			// Alan adları anahtar kelime değil, yalnız içleri gezilir.
 			if k == "properties" || k == "$defs" {
 				if m, ok := v.(map[string]any); ok {
 					for name, sub := range m {
@@ -327,7 +296,6 @@ func message(id, model string, in int, r Reply) map[string]any {
 	}
 }
 
-// chunkRunes is the size of each text_delta.
 const chunkRunes = 8
 
 func streamReply(w http.ResponseWriter, r *http.Request, id, model string, in int, rep Reply) {

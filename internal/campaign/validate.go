@@ -13,26 +13,17 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// Limits of a new campaign.
 const (
 	MaxBriefChars = 2000
-	MaxURLChars   = 40 // matches the CHECK on campaigns.campaign_url
+	MaxURLChars   = 40
 )
 
-// Revision is a validated segment plus content. SegmentDoc is the rule as
-// segment.Validate normalized it in place; it is what gets stored.
 type Revision struct {
 	Segment    segment.Rule
 	SegmentDoc any
 	Content    content.Content
 }
 
-// ValidateRevision checks a revision document (an LLM answer or a human
-// edit). It checks the top-level keys itself and hands each part to its own
-// validator, with paths prefixed /segment and /content. It does not run
-// revision.schema.json first: that schema refs the segment schema, so upper
-// case enums would fail before normalization, and every error would be
-// reported twice.
 func ValidateRevision(set *schema.Set, doc any) (Revision, validation.Result) {
 	var res validation.Result
 	m, ok := doc.(map[string]any)
@@ -75,16 +66,11 @@ func merge(dst *validation.Result, src validation.Result, prefix string) {
 	}
 }
 
-// New is a validated request to create a campaign.
 type New struct {
 	Brief       string
 	CampaignURL string
 }
 
-// ValidateNew checks a create request: {"brief", "campaign_url"} and nothing
-// else. The brief is 1 to MaxBriefChars characters. campaign_url is required,
-// so {{campaign_url}} always has a target: https, on a host in hosts, with no
-// user info or port, at most MaxURLChars characters.
 func ValidateNew(doc any, hosts []string) (New, validation.Result) {
 	var res validation.Result
 	m, ok := doc.(map[string]any)
@@ -142,6 +128,5 @@ func allowedURL(s string, hosts []string) bool {
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" {
 		return false
 	}
-	// u.Host, not u.Hostname(): a port is not allowed either.
-	return slices.Contains(hosts, strings.ToLower(u.Host))
+	return slices.Contains(hosts, strings.ToLower(u.Host)) // kapı numarası da yasak, adres olduğu gibi bakılır
 }

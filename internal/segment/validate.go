@@ -13,37 +13,31 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// Condition kinds.
 const (
 	KindEnum   = "enum_attribute"
 	KindNumber = "number_attribute"
 	KindEvent  = "event"
 )
 
-// Rule is a validated segment rule.
 type Rule struct {
-	Match      string // "all" or "any"
+	Match      string
 	Conditions []Condition
 }
 
-// Condition is one validated condition. Which fields are set depends on Kind.
 type Condition struct {
 	Kind string
 
-	// Attribute conditions (KindEnum, KindNumber).
 	Field  string
 	Op     string
-	Value  string   // KindEnum with eq or neq
-	Values []string // KindEnum with in or not_in
-	Number int      // KindNumber
+	Value  string
+	Values []string
+	Number int
 
-	// Event conditions (KindEvent).
 	Event      string
 	WithinDays int
 	Negate     bool
 }
 
-// ValidateJSON parses and validates a rule given as raw JSON.
 func ValidateJSON(set *schema.Set, data []byte) (Rule, validation.Result) {
 	doc, err := schema.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -54,9 +48,6 @@ func ValidateJSON(set *schema.Set, data []byte) (Rule, validation.Result) {
 	return Validate(set, doc)
 }
 
-// Validate checks a decoded rule (from schema.Decode) and reports every
-// problem with a precise path. It first lowercases ASCII letters in enum
-// strings (docs/segment-rules.md, Normalization), changing doc in place.
 func Validate(set *schema.Set, doc any) (Rule, validation.Result) {
 	var res validation.Result
 	normalize(doc)
@@ -65,9 +56,6 @@ func Validate(set *schema.Set, doc any) (Rule, validation.Result) {
 		return toRule(doc), res
 	}
 
-	// The condition union reports a failure for each of its branches, which
-	// is noise. Keep errors outside the conditions as they are, and explain
-	// each failing condition against the one branch it was meant to be.
 	failing := map[int]bool{}
 	for _, is := range schema.Issues(err, "") {
 		if i, ok := conditionIndex(is.Path); ok {
@@ -82,7 +70,6 @@ func Validate(set *schema.Set, doc any) (Rule, validation.Result) {
 		path := fmt.Sprintf("/conditions/%d", i)
 		issues := explain(set, conds[i], path)
 		if len(issues) == 0 {
-			// Never report "invalid" without saying why.
 			issues = []validation.Issue{{Path: path, Code: validation.SchemaViolation, Message: "condition matches no allowed form"}}
 		}
 		res.Errors = append(res.Errors, issues...)
@@ -94,8 +81,6 @@ func Validate(set *schema.Set, doc any) (Rule, validation.Result) {
 	return Rule{}, res
 }
 
-// explain validates one condition against the schema branch its kind, field
-// and operator point to.
 func explain(set *schema.Set, c any, path string) []validation.Issue {
 	m, ok := c.(map[string]any)
 	if !ok {
@@ -141,7 +126,6 @@ func explain(set *schema.Set, c any, path string) []validation.Issue {
 	}
 }
 
-// keyProblem reports a missing key, or a value that is not one of allowed.
 func keyProblem(m map[string]any, path, key, allowed string) []validation.Issue {
 	if _, present := m[key]; !present {
 		return []validation.Issue{{Path: path + "/" + key, Code: validation.Required, Message: fmt.Sprintf("missing required key %q", key)}}
@@ -151,10 +135,6 @@ func keyProblem(m map[string]any, path, key, allowed string) []validation.Issue 
 		Message: fmt.Sprintf("%s is not allowed; use one of: %s", got, allowed)}}
 }
 
-// branch validates against one $defs entry. A single value where a list is
-// needed, or the reverse, becomes op_value_mismatch. The library reports that
-// as a type error or an enum error depending on the branch, so the rewrite
-// looks at the shape of the value, not the error code.
 func branch(set *schema.Set, m map[string]any, path, def string, wantList bool) []validation.Issue {
 	err := set.ValidateDef(schema.SegmentRule, def, m)
 	if err == nil {
@@ -176,7 +156,6 @@ func branch(set *schema.Set, m map[string]any, path, def string, wantList bool) 
 	return issues
 }
 
-// conditionIndex returns i for paths at or under /conditions/i.
 func conditionIndex(path string) (int, bool) {
 	rest, ok := strings.CutPrefix(path, "/conditions/")
 	if !ok {
@@ -187,8 +166,7 @@ func conditionIndex(path string) (int, bool) {
 	return i, err == nil
 }
 
-// normalize lowercases ASCII letters in the enum strings of a rule. Other
-// characters are left alone, so "İSTANBUL" still fails, loudly.
+// Yalnızca yalın harfler küçülür ve noktalı büyük i yine elenir.
 func normalize(doc any) {
 	m, ok := doc.(map[string]any)
 	if !ok {
@@ -235,8 +213,6 @@ func asciiLower(s string) string {
 	}, s)
 }
 
-// toRule converts a document that passed the schema. The type assertions are
-// safe because the schema fixes every shape.
 func toRule(doc any) Rule {
 	m := doc.(map[string]any)
 	r := Rule{Match: m["match"].(string)}
@@ -266,9 +242,6 @@ func toRule(doc any) Rule {
 	return r
 }
 
-// integer reads a json.Number the schema has checked is an integer in range.
-// JSON Schema counts 30.0 as an integer, so it goes through float64, which
-// is exact for these small ranges.
 func integer(v any) int {
 	f, _ := v.(json.Number).Float64()
 	return int(f)

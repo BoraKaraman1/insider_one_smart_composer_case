@@ -24,7 +24,6 @@ func pool(t *testing.T, url string) *pgxpool.Pool {
 	return p
 }
 
-// TestCountExample runs the documented example through the real endpoint.
 func TestCountExample(t *testing.T) {
 	url, meta := testdb.Seeded(t)
 	h := handler(t, &Server{Config: Config{AdminToken: token}, Pool: pool(t, url), Now: func() time.Time { return meta.AsOf }})

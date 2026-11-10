@@ -5,24 +5,6 @@ import (
 	"testing"
 )
 
-// Plan 3, 2.4: Aggregate turns llm_calls rows into the reported numbers.
-// Contract assumed:
-//
-//	CallRow{CampaignID, Stage, Outcome, ErrorClass string; LatencyMS,
-//	        InputTokens, OutputTokens int; Codes []string}
-//	Aggregate(rows []CallRow) Numbers   rows in id order
-//	Numbers{Stages map[string]StageNumbers; Generations int;
-//	        InputTokens, OutputTokens int}           totals over all rows
-//	StageNumbers{FirstAttemptValid, ValidAfterRepair, Failed,
-//	        ValidationAttempts, Refusals int; TransportRetries map[string]int;
-//	        FailureCodes map[string]int; LatencyP50MS, LatencyP95MS int}
-//
-// Each (campaign, stage) that ran ends as exactly one of first-attempt
-// valid, valid after repair, or failed. A refusal row is a validation
-// attempt that ends the stage as failed, and is also counted in Refusals.
-// Transport rows are never validation attempts. Latency percentiles use the
-// nearest rank over every call of the stage, transport calls included.
-
 func row(campaign, stage, outcome string, latency int, codes ...string) CallRow {
 	return CallRow{CampaignID: campaign, Stage: stage, Outcome: outcome, LatencyMS: latency,
 		InputTokens: 100, OutputTokens: 10, Codes: codes}
@@ -37,19 +19,15 @@ func transport(campaign, stage, class string, latency int) CallRow {
 
 func TestAggregate(t *testing.T) {
 	rows := []CallRow{
-		// A: valid segment; content valid after a transport retry.
 		row("A", "segment", "valid", 100),
 		transport("A", "content", "server_error", 50),
 		row("A", "content", "valid", 60),
-		// B: both stages repaired.
 		row("B", "segment", "invalid", 200, "unknown_field"),
 		row("B", "segment", "valid", 300),
 		row("B", "content", "invalid", 70, "unknown_variable"),
 		row("B", "content", "invalid", 80, "unknown_variable", "url_not_allowed"),
 		row("B", "content", "valid", 90),
-		// C: refused at the segment stage; content never ran.
 		row("C", "segment", "refusal", 400),
-		// D: content fails after three invalid answers and a 429.
 		row("D", "segment", "valid", 500),
 		row("D", "content", "invalid", 10, "sms_too_long"),
 		transport("D", "content", "rate_limited", 15),
@@ -76,8 +54,7 @@ func TestAggregate(t *testing.T) {
 		FirstAttemptValid: 1, ValidAfterRepair: 1, Failed: 1, ValidationAttempts: 7, Refusals: 0,
 		TransportRetries: map[string]int{"server_error": 1, "rate_limited": 1},
 		FailureCodes:     map[string]int{"unknown_variable": 2, "url_not_allowed": 1, "sms_too_long": 3},
-		// Sorted: 10 15 20 30 50 60 70 80 90; rank ceil(.5*9)=5, ceil(.95*9)=9.
-		LatencyP50MS: 50, LatencyP95MS: 90,
+		LatencyP50MS:     50, LatencyP95MS: 90,
 	})
 }
 
@@ -111,7 +88,6 @@ func checkStage(t *testing.T, name string, got, want StageNumbers) {
 	}
 }
 
-// equalCounts treats a nil map as empty.
 func equalCounts(a, b map[string]int) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true

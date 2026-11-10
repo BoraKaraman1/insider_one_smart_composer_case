@@ -8,24 +8,21 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
-// Fixture is a named recipient the harness inserts (plan 3, 2.2).
 type Fixture struct {
 	ID           string
 	ConsentSMS   bool
 	ConsentEmail bool
 }
 
-// Fixtures maps a fixture name to the inserted row.
 type Fixtures map[string]Fixture
 
 type fixtureSpec struct {
 	name       string
 	city       string
 	sms, email bool
-	purchased  bool // bought after the cart add, inside 30 days
+	purchased  bool
 }
 
-// Every fixture added an item to the cart two days before asOf.
 var fixtureSpecs = []fixtureSpec{
 	{name: "istanbul_cart_no_purchase", city: "istanbul", sms: true, email: true},
 	{name: "istanbul_cart_purchased", city: "istanbul", sms: true, email: true, purchased: true},
@@ -34,7 +31,6 @@ var fixtureSpecs = []fixtureSpec{
 	{name: "istanbul_cart_no_purchase_no_consent", city: "istanbul", sms: false, email: false},
 }
 
-// FixtureNames returns the fixture names, in insert order.
 func FixtureNames() []string {
 	out := make([]string, len(fixtureSpecs))
 	for i, f := range fixtureSpecs {
@@ -43,8 +39,6 @@ func FixtureNames() []string {
 	return out
 }
 
-// InsertFixtures inserts the fixture users and their events, relative to
-// asOf. Their contact fields are placeholders on a reserved domain.
 func InsertFixtures(ctx context.Context, db store.DB, asOf time.Time) (Fixtures, error) {
 	const day = 24 * time.Hour
 	asOf = asOf.UTC().Truncate(time.Second)
@@ -71,11 +65,8 @@ func InsertFixtures(ctx context.Context, db store.DB, asOf time.Time) (Fixtures,
 	return fx, nil
 }
 
-// Audience maps a channel to the set of user ids in its audience.
 type Audience map[string]map[string]bool
 
-// Audiences runs a rule through segment.AudienceQuery, the compiler and
-// consent filter that fan-out uses, for both channels.
 func Audiences(ctx context.Context, db store.DB, r segment.Rule, asOf time.Time) (Audience, error) {
 	aud := Audience{}
 	for _, ch := range []string{"sms", "email"} {

@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse guard: keeps secrets (.env files and the Anthropic API key) out of
-# Claude Code sessions. This is the second layer behind permissions.deny in
-# .claude/settings.json.
-#
-# Text matching is not a security boundary: a script that opens .env by itself
-# is not caught. It does catch the usual ways a session reads or prints the key.
-# The real guarantee is that nothing in this repo needs the key at dev or test
-# time (tests use the mock LLM), so a session never has a reason to touch it.
-#
-# Exit 2 blocks the call and shows stderr to Claude. Exit 0 means no decision.
+# Oturumun .env veya anahtarı okumasını keser. Çıkış 2 çağrıyı durdurur.
 set -uo pipefail
 
 block() {

@@ -17,8 +17,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// generateAPI builds the API with an insert-only River client, as the api
-// process holds one. No worker runs, so jobs stay queued for inspection.
 func generateAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 	url, meta := testdb.Seeded(t)
@@ -53,8 +51,6 @@ func generateJobArgs(t *testing.T, p *pgxpool.Pool, campaignID string) []jobs.Ge
 	return out
 }
 
-// POST /generate moves the campaign to generating and enqueues the job in
-// one transaction, then answers 202 with the URL of its event stream.
 func TestGenerateEndpoint(t *testing.T) {
 	h, p := generateAPI(t)
 	for _, from := range []string{"draft", "in_review", "generation_failed"} {

@@ -10,22 +10,13 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockllm"
 )
 
-// Plan 3, 3.4: Generator.Metrics is an optional interface that
-// *metrics.Registry satisfies; nil is a no-op. Outcome label values:
-// llm_requests_total uses the llm_calls outcomes (valid, invalid, refusal,
-// max_tokens, transport_error); generation_duration_seconds uses done or
-// failed.
-
 const realBackoff = 30 * time.Millisecond
 
-// generation_duration_seconds is observed once per Run and covers the
-// whole run: it is at least the sum of the call latencies plus the backoff.
 func TestGenerationMetricsWithBackoff(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
 	reg := metrics.New()
 	g.Metrics = reg
-	// A real, short sleep, so the backoff shows in wall-clock time.
 	g.Sleep = func(ctx context.Context, _ time.Duration) error {
 		select {
 		case <-time.After(realBackoff):
@@ -76,7 +67,6 @@ func TestGenerationMetricsWithBackoff(t *testing.T) {
 	}
 }
 
-// Each validation code of a rejected answer counts once under its stage.
 func TestGenerationMetricsValidationFailures(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -98,7 +88,6 @@ func TestGenerationMetricsValidationFailures(t *testing.T) {
 	}
 }
 
-// A refused generation is observed once, as failed.
 func TestGenerationMetricsFailed(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})

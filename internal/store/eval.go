@@ -9,16 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The eval harness (internal/eval) works on its own clone of a seeded
-// template database. Its SQL lives here.
-
-// templateCloneLock is the advisory lock key internal/testdb takes around a
-// template clone. Postgres refuses to copy a template while another session
-// uses it, so every cloner takes the same lock. Keep the two equal.
 const templateCloneLock int64 = 0x7e57db
 
-// CloneDatabase creates database name as a copy of template, over the admin
-// connection adminURL. Both names are quoted as identifiers.
 func CloneDatabase(ctx context.Context, adminURL, template, name string) error {
 	conn, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
@@ -33,7 +25,6 @@ func CloneDatabase(ctx context.Context, adminURL, template, name string) error {
 	return errors.Join(err, uerr)
 }
 
-// DropDatabase drops database name, closing any session still on it.
 func DropDatabase(ctx context.Context, adminURL, name string) error {
 	conn, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
@@ -44,7 +35,6 @@ func DropDatabase(ctx context.Context, adminURL, name string) error {
 	return err
 }
 
-// EvalUser is a fixture recipient for the eval harness.
 type EvalUser struct {
 	FirstName, LastName, Email, Phone string
 	City, Language, LoyaltyTier       string
@@ -52,7 +42,6 @@ type EvalUser struct {
 	ConsentSMS, ConsentEmail          bool
 }
 
-// InsertEvalUser inserts one user and returns its id.
 func InsertEvalUser(ctx context.Context, db DB, u EvalUser) (string, error) {
 	var id string
 	err := db.QueryRow(ctx, `INSERT INTO users (first_name, last_name, email, phone, city, language, loyalty_tier,
@@ -62,14 +51,11 @@ func InsertEvalUser(ctx context.Context, db DB, u EvalUser) (string, error) {
 	return id, err
 }
 
-// InsertUserEvent records one event of a user.
 func InsertUserEvent(ctx context.Context, db DB, userID, typ string, at time.Time) error {
 	_, err := db.Exec(ctx, `INSERT INTO user_events (user_id, type, occurred_at) VALUES ($1, $2, $3)`, userID, typ, at)
 	return err
 }
 
-// AudienceIDs runs a recipient query from segment.AudienceQuery and returns
-// the user ids. The SQL text comes only from the segment compiler.
 func AudienceIDs(ctx context.Context, db DB, audienceSQL string, args []any) ([]string, error) {
 	rows, err := db.Query(ctx, "SELECT id::text FROM ("+audienceSQL+") a", args...)
 	if err != nil {
@@ -78,7 +64,6 @@ func AudienceIDs(ctx context.Context, db DB, audienceSQL string, args []any) ([]
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
-// LLMCallRow is the part of an llm_calls row the eval report reads.
 type LLMCallRow struct {
 	CampaignID   string
 	Stage        string
@@ -87,10 +72,9 @@ type LLMCallRow struct {
 	LatencyMS    int
 	InputTokens  int
 	OutputTokens int
-	Codes        []string // validation error codes, in order
+	Codes        []string
 }
 
-// ListLLMCalls returns a campaign's llm_calls rows in id order.
 func ListLLMCalls(ctx context.Context, db DB, campaignID string) ([]LLMCallRow, error) {
 	rows, err := db.Query(ctx, `SELECT campaign_id::text, stage, outcome, coalesce(error_class::text, ''), latency_ms,
 			coalesce(input_tokens, 0), coalesce(output_tokens, 0), validation_errors

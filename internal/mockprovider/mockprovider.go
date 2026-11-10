@@ -1,12 +1,4 @@
-// Package mockprovider is a fake SMS and email provider with fault
-// injection and idempotency storage. It has its own database and imports no
-// app package, so it cannot cheat: it knows nothing about messages except
-// what each request carries.
-//
-// POST /v1/messages takes {channel, to, subject?, body} with a required
-// Idempotency-Key. The same key and payload replays the stored answer
-// without sending; the same key with another payload gets 422. Requests
-// with one key queue on a per-key advisory lock, so only one of them sends.
+// Paket kendi veritabanında hata enjekte eden sahte sağlayıcıdır.
 package mockprovider
 
 import (
@@ -30,32 +22,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Config sets the chaos. Rates are shares of requests in [0, 1], drawn from
-// a generator seeded with Seed, so a run can be repeated.
 type Config struct {
 	Seed    uint64
-	Latency time.Duration // each request waits a random time in [0, Latency]
+	Latency time.Duration
 
 	Rate500             float64
 	Rate503             float64
-	Rate429             float64 // with Retry-After when RetryAfter > 0
+	Rate429             float64
 	Rate429NoRetryAfter float64
-	RateHang            float64 // no answer and no send until the client leaves
-	RateDrop            float64 // record the send, then drop the connection
-	RateLate            float64 // record the send, answer after the client gave up
+	RateHang            float64
+	RateDrop            float64
+	RateLate            float64
 	RetryAfter          time.Duration
 
-	// ChaosHeader honors X-Chaos to force one outcome. Tests only.
 	ChaosHeader bool
 }
 
-// Outcomes that X-Chaos can force, besides "ok".
 var chaosModes = []string{"500", "503", "429", "429-no-retry-after", "400", "hang", "drop", "late"}
 
-// ConfigFromEnv reads MOCKPROVIDER_* variables: SEED, LATENCY and
-// RETRY_AFTER (Go durations), RATE_500, RATE_503, RATE_429,
-// RATE_429_NO_RETRY_AFTER, RATE_HANG, RATE_DROP, RATE_LATE, and
-// CHAOS_HEADER=true.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	var c Config
 	var errs []error
@@ -106,7 +90,6 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	return c, errors.Join(errs...)
 }
 
-// Migrate creates the provider's tables. Running it again changes nothing.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS sends (
@@ -134,7 +117,6 @@ CREATE TABLE IF NOT EXISTS requests (
 	return err
 }
 
-// Server is the provider.
 type Server struct {
 	pool *pgxpool.Pool
 	cfg  Config
@@ -143,7 +125,6 @@ type Server struct {
 	rng *mrand.Rand
 }
 
-// New returns the provider over its own migrated database.
 func New(pool *pgxpool.Pool, cfg Config) *Server {
 	return &Server{pool: pool, cfg: cfg, rng: mrand.New(mrand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15))}
 }
@@ -168,7 +149,6 @@ type message struct {
 	Body    string `json:"body"`
 }
 
-// draw picks the outcome and latency of one request.
 func (s *Server) draw() (string, time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -245,7 +225,6 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Error modes answer before processing: nothing is stored.
 	switch mode {
 	case "500", "503", "400", "429", "429-no-retry-after":
 		if !wait() {
@@ -293,7 +272,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		panic(http.ErrAbortHandler) // closes the connection without an answer
+		panic(http.ErrAbortHandler)
 	case "late":
 		select {
 		case <-r.Context().Done():
@@ -307,10 +286,6 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]string{"id": id})
 }
 
-// process sends the message once per key. It holds a per-key advisory lock
-// for the whole check, send and insert, so a concurrent request with the
-// same key waits and then replays. The send itself is the latency wait: a
-// real provider takes its time while the message goes out.
 func (s *Server) process(ctx context.Context, key string, m message, send func() bool) (status int, id, outcome string, err error) {
 	canon, _ := json.Marshal(m)
 	sum := sha256.Sum256(canon)
@@ -349,20 +324,18 @@ func (s *Server) process(ctx context.Context, key string, m message, send func()
 	return http.StatusAccepted, id, "sent", tx.Commit(ctx)
 }
 
-// log records one request. A failure to record is not the client's problem.
 func (s *Server) log(ctx context.Context, channel, key, outcome string, at time.Time) {
 	_, _ = s.pool.Exec(context.WithoutCancel(ctx), `INSERT INTO requests (channel, idempotency_key, outcome, received_at) VALUES ($1, $2, $3, $4)`,
 		channel, key, outcome, at)
 }
 
-// Stats is the provider's view of what happened.
 type Stats struct {
 	Requests       int                    `json:"requests"`
 	UniqueSends    int                    `json:"unique_sends"`
 	MaxSendsPerKey int                    `json:"max_sends_per_key"`
 	Replays        int                    `json:"replays"`
 	Outcomes       map[string]int         `json:"outcomes"`
-	ReceivedAt     map[string][]time.Time `json:"received_at"` // every request per channel, failed ones too
+	ReceivedAt     map[string][]time.Time `json:"received_at"`
 }
 
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {

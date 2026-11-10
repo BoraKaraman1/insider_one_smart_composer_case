@@ -14,9 +14,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// Plan 3, 3.2 and 3.4: GET /metrics is served outside auth, and
-// http_requests_total labels its route by the mux pattern, never by the
-// path, so no id becomes a label value.
 func TestMetricsEndpoint(t *testing.T) {
 	url, meta := testdb.Seeded(t)
 	p := pool(t, url)
@@ -67,7 +64,6 @@ func TestMetricsEndpoint(t *testing.T) {
 			t.Errorf("http_requests_total{%s,status=%s} = %v, want %v", route, w.status, got, w.n)
 		}
 	}
-	// An unmatched path is one label value, not one per path.
 	do(h, "GET", "/no/such/"+f.ID, "", bearer)
 	do(h, "GET", "/no/such/other", "", bearer)
 	s = metricstest.Scrape(t, h)
@@ -78,7 +74,6 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
-// sse_streams counts open event streams and goes back down when one ends.
 func TestMetricsSSEStreams(t *testing.T) {
 	url, meta := testdb.Seeded(t)
 	p := pool(t, url)

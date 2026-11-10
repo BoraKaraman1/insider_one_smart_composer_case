@@ -1,11 +1,3 @@
-// Plan 3, 1.3: 422 issue paths carry the /revision prefix. Each known path
-// goes to its field; anything else goes to the form-level list, so no
-// error is ever dropped.
-//
-// Contract assumed (src/api/issues.ts):
-//   Issue { path: string; code: string; message: string }
-//   mapIssues(issues: Issue[]): { sms: Issue[]; emailSubject: Issue[]; emailBody: Issue[];
-//                                 segment: Issue[]; form: Issue[] }
 import { describe, expect, it } from 'vitest'
 import { mapIssues, type Issue } from './issues'
 

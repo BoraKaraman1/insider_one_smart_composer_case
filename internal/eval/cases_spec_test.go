@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Plan 3, stream 2: evals/briefs.json holds the golden briefs. Every case
-// names its fixtures from the fixed set, and the set has cases for the
-// worked example, negation, consent and injection.
 func TestGoldenBriefs(t *testing.T) {
 	cases, err := LoadCases("../../evals/briefs.json")
 	if err != nil {
@@ -62,8 +59,6 @@ func TestGoldenBriefs(t *testing.T) {
 	}
 }
 
-// LoadCases validates expected conditions with the production segment
-// validator, so a case cannot expect a rule the DSL cannot express.
 func TestLoadCasesRejectsBadExpectations(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown field":   `[{"name":"x","category":"c","brief":"b","expect":{"match":"all","conditions":[{"kind":"enum_attribute","field":"password","op":"eq","value":"x"}]}}]`,

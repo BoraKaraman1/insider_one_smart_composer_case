@@ -1,5 +1,4 @@
-// Package httpapi is the HTTP API: auth, request ids, the audience count
-// endpoint, and health checks.
+// Paket gelen istekleri karşılar.
 package httpapi
 
 import (
@@ -7,25 +6,18 @@ import (
 	"strings"
 )
 
-// Config is read from the environment at startup.
 type Config struct {
-	// AdminToken is the bearer token every /api request must carry.
 	AdminToken string
-	// AllowUnauthenticated lets the API run without a token. Dev only, and
-	// only when AdminToken is empty; a set token is always enforced.
+	// Dolu anahtar varken doğrulamasız çalışma yok sayılır.
 	AllowUnauthenticated bool
 	ListenAddr           string
-	// CampaignURLHosts are the hosts a campaign_url may point at. Empty
-	// means no campaign can be created.
+	// Boşsa kampanya oluşturulamaz.
 	CampaignURLHosts []string
 }
 
-// ErrNoToken is returned when neither a token nor the dev escape hatch is set.
 var ErrNoToken = errors.New("ADMIN_TOKEN is not set; set it, or set ALLOW_UNAUTHENTICATED=true for local development only")
 
-// ConfigFromEnv reads ADMIN_TOKEN, ALLOW_UNAUTHENTICATED, LISTEN_ADDR and
-// CAMPAIGN_URL_HOSTS (comma separated). It
-// fails closed: no token and no explicit opt-out is an error, not an open API.
+// Anahtar da kaçış da yoksa servis açık kalmaz.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	c := Config{
 		AdminToken:           getenv("ADMIN_TOKEN"),

@@ -1,13 +1,3 @@
-// The delivery polling contract (plan 1.4).
-//
-// One tick loads the campaign view, then stats and attention in parallel.
-// The next tick is scheduled 1 s after the previous one finished, so ticks
-// never overlap. Polling stops one tick after the campaign is terminal and
-// nothing is queued, retrying or sending on either channel. Failures back
-// off 1, 2, 4, 8, 15 s. A 401 stops polling. Each tick has its own
-// AbortController, aborted on campaign switch and scope dispose; a late
-// answer of an aborted tick is discarded.
-
 import { onScopeDispose, ref, watch, type Ref } from 'vue'
 import { ApiError } from '../api/client'
 import type { AttentionItem, CampaignView, Stats } from '../api/types'
@@ -23,7 +13,6 @@ const backoff = [1_000, 2_000, 4_000, 8_000, 15_000]
 const terminal = new Set(['completed', 'completed_with_failures', 'cancelled'])
 const inFlight = ['queued', 'retrying', 'sending']
 
-// settled is the stop condition: a terminal campaign with nothing in flight.
 export function settled(view: CampaignView, stats: Stats): boolean {
   if (!terminal.has(view.campaign.state)) return false
   return Object.values(stats.channels).every((c) => inFlight.every((s) => (c[s] ?? 0) === 0))
@@ -70,7 +59,7 @@ export function useDeliveryPolling(id: Ref<string>, api: PollingApi, opts: { onU
       failures = 0
       if (settled(v, s)) {
         if (sawSettled) {
-          polling.value = false // this was the final tick
+          polling.value = false // İkinci sakin tikte durur.
           return
         }
         sawSettled = true

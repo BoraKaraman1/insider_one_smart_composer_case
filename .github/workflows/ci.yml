@@ -1,6 +1,3 @@
-# CI. Step 0's checks are the lint-test and integration jobs. Stream 4 adds
-# fuzz, the mock eval, image builds and a secret scan.
-# The key is empty in every job. Nothing here reads a repository secret.
 name: ci
 
 on:
@@ -12,7 +9,6 @@ permissions:
   contents: read
 
 env:
-  # Rule 1: CI never has the key, and it never calls the real model.
   ANTHROPIC_API_KEY: ""
   LLM_MODE: mock
 
@@ -33,14 +29,14 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: staticcheck
-        # honnef.co/go/tools v0.8.2 (release 2026.2.2). MIT. Builds on Go 1.26.
+        # staticcheck v0.8.2, Go 1.26 ile derleniyor.
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           staticcheck ./...
       - name: unit tests
         run: go test -race -count=3 -timeout 5m ./...
       - name: govulncheck
-        # golang.org/x/vuln v1.9.0. Blocking.
+        # govulncheck v1.9.0, bulgu varsa iş kırmızı.
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
@@ -123,7 +119,7 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # actions: write is the artifact upload. The workflow default stays contents: read.
+    # Yazma izni yalnız rapor yüklemek için.
     permissions:
       contents: read
       actions: write
@@ -169,7 +165,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # actions: write is the build cache. The workflow default stays contents: read.
+    # Yazma izni yalnız derleme önbelleği için.
     permissions:
       contents: read
       actions: write
@@ -228,8 +224,7 @@ jobs:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
-          # github.token, not a repository secret. Comments stay off so this
-          # job needs no extra permission. A personal account needs no license.
+          # Yorum kapalı, ek izin istemesin.
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"

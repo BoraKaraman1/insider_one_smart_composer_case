@@ -21,9 +21,6 @@ import (
 
 const day = 24 * time.Hour
 
-// The oracle implements docs/segment-rules.md directly in Go, sharing no
-// code with the compiler. The SQL must agree with it on every rule.
-
 type data struct {
 	asOf   time.Time
 	users  []seed.User
@@ -171,8 +168,6 @@ func seededPool(t *testing.T) (*pgxpool.Pool, data) {
 	return pool, index(ds)
 }
 
-// TestOracle compares the database with the Go oracle on 500 random rules:
-// counts, and the exact recipient sets on both channels.
 func TestOracle(t *testing.T) {
 	pool, d := seededPool(t)
 	rng := rand.New(rand.NewPCG(5, 6))
@@ -196,7 +191,6 @@ func TestOracle(t *testing.T) {
 			nonTrivial++
 		}
 	}
-	// Guard against a generator that only makes empty or everyone rules.
 	if nonTrivial < 250 {
 		t.Fatalf("only %d of 500 rules select a proper subset of users", nonTrivial)
 	}
@@ -223,8 +217,6 @@ func mapsEqual(a, b map[[16]byte]bool) bool {
 	return true
 }
 
-// TestExampleCountsMatchDocs: the worked example gives the numbers in
-// docs/seed-data.md through the real SQL path.
 func TestExampleCountsMatchDocs(t *testing.T) {
 	pool, d := seededPool(t)
 	set, err := schema.Load()
@@ -244,14 +236,12 @@ func TestExampleCountsMatchDocs(t *testing.T) {
 	}
 }
 
-// TestConsentIsAlwaysApplied: a rule that matches everyone still returns only
-// users who consented to the channel, and the no-consent edge user never.
 func TestConsentIsAlwaysApplied(t *testing.T) {
 	pool, d := seededPool(t)
 	everyone := segment.Rule{Match: "all", Conditions: []segment.Condition{
 		{Kind: segment.KindNumber, Field: "days_since_signup", Op: "gte", Number: 0},
 	}}
-	noConsent := d.users[4].ID // edge row 5
+	noConsent := d.users[4].ID
 	for channel, consented := range map[string]func(seed.User) bool{
 		"sms":   func(u seed.User) bool { return u.ConsentSMS },
 		"email": func(u seed.User) bool { return u.ConsentEmail },
@@ -274,8 +264,6 @@ func TestConsentIsAlwaysApplied(t *testing.T) {
 	}
 }
 
-// TestBoundaries pins the exact window and day semantics on hand-made rows,
-// one user per boundary case, and checks SQL and oracle agree.
 func TestBoundaries(t *testing.T) {
 	ctx := context.Background()
 	url := testdb.Fresh(t)
@@ -330,9 +318,6 @@ func TestBoundaries(t *testing.T) {
 	cart := func(negate bool) segment.Rule {
 		return segment.Rule{Match: "all", Conditions: []segment.Condition{{Kind: segment.KindEvent, Event: "cart_add", WithinDays: 30, Negate: negate}}}
 	}
-	// Each case looks only at its own group of users ("signup ..." rows for
-	// day rules, "cart ..." rows for the event rule); the oracle checks below
-	// cover all rows.
 	cases := []struct {
 		group string
 		rule  segment.Rule
@@ -362,7 +347,6 @@ func TestBoundaries(t *testing.T) {
 			t.Errorf("%s: sql and oracle disagree", segment.RuleJSON(c.rule))
 		}
 	}
-	// Every operator and both negations agree with the oracle on these rows.
 	for _, op := range []string{"eq", "neq", "gt", "gte", "lt", "lte"} {
 		for _, n := range []int{0, 29, 30, 31} {
 			if r := days(op, n); !mapsEqual(recipients(t, pool, r, "sms", asOf), evaluate(r, d).sms) {

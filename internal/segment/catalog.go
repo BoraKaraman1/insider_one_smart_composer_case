@@ -1,14 +1,8 @@
-// Package segment implements the segment rule language described in
-// docs/segment-rules.md.
-//
-// The catalog below is the Go source of truth for the language. The JSON
-// Schema (schemas/segment_rule.schema.json) repeats it so Claude's structured
-// outputs can enforce it; catalog_test.go fails if the two drift apart.
+// Paket kuralı doğrular ve sorguya derler.
 package segment
 
 import "slices"
 
-// Limits of the rule language.
 const (
 	MaxConditions      = 10
 	MaxListValues      = 20
@@ -17,8 +11,7 @@ const (
 	DaysSinceSignupMax = 3650
 )
 
-// enumValues maps each enum attribute to its allowed values. City values are
-// ASCII slugs, so Turkish casing (İ/i) can never change a comparison.
+// Şehir değerleri yalın harftir ki Türkçe büyük harf karşılaştırmayı değiştirmesin.
 var enumValues = map[string][]string{
 	"city":         {"istanbul", "ankara", "izmir", "bursa", "antalya", "adana", "konya", "gaziantep", "kocaeli", "eskisehir"},
 	"language":     {"tr", "en"},
@@ -33,34 +26,21 @@ var (
 	numberOps  = []string{"eq", "neq", "gt", "gte", "lt", "lte"}
 )
 
-// The accessors return copies, so callers cannot change the catalog.
-
-// EnumFields returns the enum attributes in a fixed order.
 func EnumFields() []string { return slices.Clone(enumFields) }
 
-// EnumValues returns the allowed values of an enum attribute, or nil if the
-// field is not an enum attribute.
 func EnumValues(field string) []string { return slices.Clone(enumValues[field]) }
 
-// EventTypes returns the event types a rule can match on.
 func EventTypes() []string { return slices.Clone(eventTypes) }
 
-// SingleOps returns the operators that take one enum value.
 func SingleOps() []string { return slices.Clone(singleOps) }
 
-// ListOps returns the operators that take a list of enum values.
 func ListOps() []string { return slices.Clone(listOps) }
 
-// NumberOps returns the operators for days_since_signup.
 func NumberOps() []string { return slices.Clone(numberOps) }
 
-// cityNames are the display names of the city slugs, for rendering
-// {{city}}. Each fits the city render limit (internal/content).
 var cityNames = map[string]string{
 	"istanbul": "İstanbul", "ankara": "Ankara", "izmir": "İzmir", "bursa": "Bursa", "antalya": "Antalya",
 	"adana": "Adana", "konya": "Konya", "gaziantep": "Gaziantep", "kocaeli": "Kocaeli", "eskisehir": "Eskişehir",
 }
 
-// CityDisplayName returns the display name of a city slug, or "" for a slug
-// outside the catalog.
 func CityDisplayName(slug string) string { return cityNames[slug] }

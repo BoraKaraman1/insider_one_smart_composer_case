@@ -1,9 +1,4 @@
-// Package testdb gives integration tests their own Postgres database, so
-// packages can run in parallel without touching each other's data.
-//
-// Tests need TEST_DATABASE_URL (an admin connection to the test server).
-// Without it they skip, unless REQUIRE_DB=1, which make test sets: then a
-// missing database fails the run instead of silently skipping it.
+// Paket her bütünleşme testine ayrı bir veritabanı verir.
 package testdb
 
 import (
@@ -17,31 +12,23 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// cloneLock serializes template clones across test packages: Postgres
-// refuses to copy a template database while another session uses it.
+// Bu kilit mağaza paketindeki kopyalama kilidiyle aynı kalmalı.
 const cloneLock int64 = 0x7e57db
 
-// Fresh creates an empty database for the calling test, drops it when the
-// test ends, and returns its connection URL.
 func Fresh(t testing.TB) string {
 	t.Helper()
 	return create(t, "")
 }
 
-// Seed describes the data in a seeded clone, read from its seed_meta row.
 type Seed struct {
 	AsOf  time.Time
 	Seed  int64
 	Users int
 }
 
-// Seeded clones the template database that make test builds (migrated, then
-// seeded at a fixed anchor) for the calling test, drops the clone when the
-// test ends, and returns its URL and seed parameters. The template name is
-// TEST_TEMPLATE_DB, default app_template.
 func Seeded(t testing.TB) (string, Seed) {
 	t.Helper()
 	template := os.Getenv("TEST_TEMPLATE_DB")

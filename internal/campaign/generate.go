@@ -26,21 +26,15 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// WorkerActor is the actor of transitions the generate job makes.
 const WorkerActor = "worker"
 
-// Retry limits per stage (rule 5, rule 6). They are counted separately: a
-// transport failure does not use up a validation attempt.
 const (
 	MaxValidationAttempts = 3
 	MaxTransportRetries   = 3
 )
 
-// DefaultDeltaInterval is how often streamed copy is written to the event
-// log, per field. The worker sets it; zero writes every delta.
 const DefaultDeltaInterval = 150 * time.Millisecond
 
-// Reasons in the failed event and in the audit trail.
 const (
 	ReasonRefusal       = "refusal"
 	ReasonInvalidOutput = "invalid_output"
@@ -48,41 +42,30 @@ const (
 	ReasonCancelled     = "cancelled"
 )
 
-// LLM is what the generator needs from the model client. *llm.Client
-// satisfies it.
 type LLM interface {
 	Call(ctx context.Context, conv *llm.Conversation, onText func(string)) (llm.Response, error)
 	Model() string
 }
 
-// Pool is a database with transactions. *pgxpool.Pool satisfies it.
 type Pool interface {
 	Beginner
 	store.DB
 }
 
-// Generator runs the generate job: the segment stage, then the content
-// stage, each validated and repaired, and records every call and event.
 type Generator struct {
-	Pool    Pool
-	Schemas *schema.Set
-	LLM     LLM
-	Now     func() time.Time // the asOf of audience counts
-	Rand    *rand.Rand       // backoff jitter; shared, so guarded by mu
-	Sleep   func(ctx context.Context, d time.Duration) error
-	// DeltaInterval batches streamed copy per field (DefaultDeltaInterval
-	// in the worker). Zero writes every delta.
+	Pool          Pool
+	Schemas       *schema.Set
+	LLM           LLM
+	Now           func() time.Time
+	Rand          *rand.Rand
+	Sleep         func(ctx context.Context, d time.Duration) error
 	DeltaInterval time.Duration
 	Log           *slog.Logger
-	// Metrics counts LLM calls and times generations. Nil counts nothing.
-	Metrics Metrics
+	Metrics       Metrics
 
 	mu sync.Mutex
 }
 
-// Metrics is what the generator reports. *metrics.Registry satisfies it.
-// Outcomes of LLMRequest are the llm_calls outcomes; Generation gets done
-// or failed.
 type Metrics interface {
 	LLMRequest(stage, outcome string, d time.Duration)
 	LLMTokens(stage string, input, output int)
@@ -106,23 +89,14 @@ func (g *Generator) metrics() Metrics {
 	return noMetrics{}
 }
 
-// errStop means the campaign is no longer generating at the job's version
-// (cancelled, or a newer generation started): the job stops and writes
-// nothing more.
 var errStop = errors.New("campaign: generation no longer current")
 
-// Run runs one generation. A failed generation is an outcome, written to
-// the campaign; Run returns an error only when the job itself could not do
-// its work (a database error, or the context ended while the campaign was
-// still generating), so River can retry it.
 func (g *Generator) Run(ctx context.Context, args jobs.GenerateArgs) error {
 	r := &genRun{g: g, id: args.CampaignID, version: args.Version}
 	start := time.Now()
 	err := r.run(ctx)
 	met := g.metrics()
 	if r.outcome != "" {
-		// Observed once per generation that reached done or failed; a
-		// stopped or interrupted run has no outcome.
 		met.Generation(r.outcome, time.Since(start))
 	}
 	met.JobProcessed(time.Now())
@@ -130,8 +104,6 @@ func (g *Generator) Run(ctx context.Context, args jobs.GenerateArgs) error {
 		return nil
 	}
 	if err != nil && ctx.Err() != nil {
-		// River cancelled the job, or the worker is shutting down. If the
-		// campaign moved on, there is nothing left to do.
 		if ok, cerr := r.current(context.WithoutCancel(ctx)); cerr == nil && !ok {
 			return nil
 		}
@@ -143,7 +115,7 @@ type genRun struct {
 	g       *Generator
 	id      string
 	version int
-	outcome string // done or failed, once written
+	outcome string
 }
 
 func (r *genRun) log() *slog.Logger {
@@ -153,13 +125,10 @@ func (r *genRun) log() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// current reports whether the campaign is still generating at the version.
 func (r *genRun) current(ctx context.Context) (bool, error) {
 	return store.LockGenerating(ctx, r.g.Pool, r.id, r.version)
 }
 
-// write runs fn in a transaction that holds the campaign row, only while the
-// generation is current. Otherwise it returns errStop and writes nothing.
 func (r *genRun) write(ctx context.Context, fn func(pgx.Tx) error) error {
 	return inTx(ctx, r.g.Pool, func(tx pgx.Tx) error {
 		ok, err := store.LockGenerating(ctx, tx, r.id, r.version)
@@ -193,7 +162,6 @@ func (r *genRun) run(ctx context.Context) error {
 	}
 	asOf := r.g.Now().UTC().Truncate(time.Microsecond)
 
-	// Segment stage.
 	var rule segment.Rule
 	var ruleDoc any
 	var segWarnings []validation.Issue
@@ -221,7 +189,6 @@ func (r *genRun) run(ctx context.Context) error {
 		return err
 	}
 
-	// Content stage, streamed.
 	var cont content.Content
 	var contWarnings []validation.Issue
 	out, err = r.stage(ctx, llm.NewConversation(llm.Content, llm.ContentTurn(c.Brief, description)), func(text string) validation.Result {
@@ -234,7 +201,6 @@ func (r *genRun) run(ctx context.Context) error {
 		return r.finish(ctx, err, out)
 	}
 
-	// Success: the revision, the transition and the done event together.
 	segJSON, err := json.Marshal(ruleDoc)
 	if err != nil {
 		return err
@@ -267,7 +233,6 @@ func (r *genRun) run(ctx context.Context) error {
 	}))
 }
 
-// wrote records the run's outcome when its final write applied.
 func (r *genRun) wrote(outcome string, err error) error {
 	if err == nil {
 		r.outcome = outcome
@@ -275,15 +240,12 @@ func (r *genRun) wrote(outcome string, err error) error {
 	return err
 }
 
-// failure is how a stage failed: a reason and the errors to show.
 type failure struct {
 	stage  llm.Stage
 	reason string
 	errors []validation.Issue
 }
 
-// finish turns a stage result into the job's result: a failure moves the
-// campaign to generation_failed with a failed event.
 func (r *genRun) finish(ctx context.Context, err error, f *failure) error {
 	if err != nil {
 		return err
@@ -303,10 +265,6 @@ func (r *genRun) finish(ctx context.Context, err error, f *failure) error {
 	}))
 }
 
-// stage runs one stage: up to MaxValidationAttempts answers, each after up
-// to MaxTransportRetries transport retries. validate checks an answer and
-// keeps what it needs. deltas, if set, streams the answer's copy fields. It
-// returns a failure, or nil when an answer was valid.
 func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate func(string) validation.Result,
 	deltas func(ctx context.Context, attempt int) *deltaWriter) (*failure, error) {
 	stage := conv.Stage
@@ -314,7 +272,7 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 	var last []validation.Issue
 	for attempt := 1; attempt <= MaxValidationAttempts; attempt++ {
 		var resp llm.Response
-		var took time.Duration // the call's latency, as the metrics see it
+		var took time.Duration
 		for try := 0; ; try++ {
 			if ok, err := r.current(ctx); err != nil || !ok {
 				return nil, orStop(err)
@@ -339,16 +297,15 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 			}
 			var ce *llm.CallError
 			if !errors.As(err, &ce) {
-				return nil, err // the job's context ended
+				return nil, err
 			}
 			met.LLMRequest(string(stage), "transport_error", took)
 			if werr := r.record(ctx, store.LLMCall{Stage: string(stage), Attempt: attempt, Outcome: "transport_error",
 				ErrorClass: string(ce.Class), Model: r.g.LLM.Model(), LatencyMS: int(time.Since(start).Milliseconds())}); werr != nil {
 				return nil, werr
 			}
+			// Yarım kalan metin okuyucuya silinsin diye işaretlenir.
 			if dw != nil && dw.wrote {
-				// Copy was shown for a call that broke off: tell the reader
-				// to clear it.
 				if werr := r.event(ctx, "attempt_failed", map[string]any{"stage": stage, "attempt": attempt,
 					"reason": ReasonTransport, "class": ce.Class}); werr != nil {
 					return nil, werr
@@ -439,8 +396,6 @@ func (g *Generator) backoff(try int) time.Duration {
 	return retry.Backoff(try, g.Rand)
 }
 
-// deltaWriter turns streamed answer text into delta events: the new text of
-// each copy field, at most once per DeltaInterval, and the rest on flush.
 type deltaWriter struct {
 	r        *genRun
 	ctx      context.Context
@@ -495,16 +450,13 @@ func (d *deltaWriter) emit() error {
 	return nil
 }
 
-// GenerateWorker runs generate jobs.
 type GenerateWorker struct {
 	river.WorkerDefaults[jobs.GenerateArgs]
 	g *Generator
 }
 
-// NewGenerateWorker wraps a generator as a River worker.
 func NewGenerateWorker(g *Generator) *GenerateWorker { return &GenerateWorker{g: g} }
 
-// Timeout bounds one generation (both stages with all retries).
 func (w *GenerateWorker) Timeout(*river.Job[jobs.GenerateArgs]) time.Duration {
 	return jobs.GenerateTimeout
 }
@@ -513,22 +465,15 @@ func (w *GenerateWorker) Work(ctx context.Context, job *river.Job[jobs.GenerateA
 	return w.g.Run(ctx, job.Args)
 }
 
-// Inserter inserts a River job in a transaction. *river.Client[pgx.Tx]
-// satisfies it.
 type Inserter interface {
 	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
-// StartGeneration moves a campaign to generating, writes its started event
-// and enqueues the generate job, in one transaction: none of them exists
-// without the others. It returns the job's arguments.
 func StartGeneration(ctx context.Context, db Beginner, ins Inserter, id string, version int, actor string) (jobs.GenerateArgs, error) {
 	args, _, err := BeginGeneration(ctx, db, ins, id, version, actor)
 	return args, err
 }
 
-// BeginGeneration is StartGeneration that also returns the id of the
-// started event, so a reader can stream this generation's events only.
 func BeginGeneration(ctx context.Context, db Beginner, ins Inserter, id string, version int, actor string) (jobs.GenerateArgs, int64, error) {
 	var args jobs.GenerateArgs
 	var started int64
@@ -550,15 +495,10 @@ func BeginGeneration(ctx context.Context, db Beginner, ins Inserter, id string, 
 	return args, started, err
 }
 
-// JobCanceller cancels a River job in a transaction. *river.Client[pgx.Tx]
-// satisfies it.
 type JobCanceller interface {
 	JobCancelTx(ctx context.Context, tx pgx.Tx, jobID int64) (*rivertype.JobRow, error)
 }
 
-// CancelWithJobs is Cancel that also cancels the campaign's unfinished
-// generate jobs through River, in the same transaction. A running job gets
-// its context cancelled; a queued one never starts.
 func CancelWithJobs(ctx context.Context, db Beginner, jc JobCanceller, id string, version int, actor string) error {
 	return inTx(ctx, db, func(tx pgx.Tx) error {
 		if err := cancelTx(ctx, tx, id, version, actor); err != nil {

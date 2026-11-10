@@ -9,9 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-// ExtractFields reads the three copy fields from an unfinished JSON answer,
-// so the reviewer sees the copy as it streams. It must never show text that
-// the final answer does not start with.
 func TestExtractFields(t *testing.T) {
 	cases := []struct {
 		name, in string
@@ -49,8 +46,6 @@ func TestExtractFields(t *testing.T) {
 	}
 }
 
-// FuzzExtractFieldsNeverPanics feeds arbitrary model output. Hostile output
-// must never crash the stream.
 func FuzzExtractFieldsNeverPanics(f *testing.F) {
 	for _, s := range []string{``, `{`, `{"sms":{"body":"\`, `{"sms":{"body":"\u`, `{"sms":{"body":"\ud800\u`, `"}}}]]]`, `{"email":{"subject":"\uZZZZ`} {
 		f.Add(s)
@@ -60,9 +55,6 @@ func FuzzExtractFieldsNeverPanics(f *testing.F) {
 	})
 }
 
-// FuzzExtractFieldsPrefix encodes three values in several ways and checks
-// every prefix of the encoding: each field read from a prefix is a prefix of
-// the final value, and the full text gives exactly the final value.
 func FuzzExtractFieldsPrefix(f *testing.F) {
 	f.Add("Merhaba {{first_name}}", "Sepetin seni bekliyor", "Satır 1\nSatır 2 \"tırnak\" \\ 😀", uint8(0))
 	f.Add("", "", "", uint8(7))
@@ -91,10 +83,6 @@ func FuzzExtractFieldsPrefix(f *testing.F) {
 	})
 }
 
-// encodeContent writes a content answer. The mode bits pick key order,
-// indentation and whether every non-ASCII rune is written as a \u escape
-// (with surrogate pairs), so the extractor sees the encodings a model may
-// produce.
 func encodeContent(sms, subject, body string, mode uint8) string {
 	str := func(s string) string {
 		if mode&4 == 0 {

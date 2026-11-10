@@ -1,9 +1,4 @@
-// Package llm is a thin wrapper over the Anthropic Go SDK for the two
-// generation stages. It sends the request shape the stage needs (adaptive
-// thinking, explicit effort, JSON outputs with the API-derived schema, the
-// refusal fallback), streams text deltas, and turns every failure into a
-// classified CallError. It never retries: retries go through internal/retry
-// in the caller, so they are counted and visible.
+// Paket model çağrılarını iki üretim aşaması için sarar.
 package llm
 
 import (
@@ -24,26 +19,18 @@ import (
 )
 
 const (
-	// DefaultModel is used when ANTHROPIC_MODEL is not set.
-	DefaultModel = "claude-opus-5-5"
-	// FallbackBeta enables the server-side refusal fallback ("fallbacks").
-	FallbackBeta = "server-side-fallback-2026-07-01"
-	// MockBaseURL is the compose service of internal/mockllm.
-	MockBaseURL = "http://mockllm:8090"
-	// AnthropicBaseURL is the real API.
+	DefaultModel     = "claude-opus-5-5"
+	FallbackBeta     = "server-side-fallback-2026-07-01"
+	MockBaseURL      = "http://mockllm:8090"
 	AnthropicBaseURL = "https://api.anthropic.com"
-	// MockAPIKey is the placeholder sent to the mock. It is not a key.
-	MockAPIKey = "mock-placeholder"
+	MockAPIKey       = "mock-placeholder"
 
 	DefaultStallTimeout = 20 * time.Second
 	DefaultTotalTimeout = 120 * time.Second
 
-	// MaxTokens bounds one answer, adaptive thinking included.
 	MaxTokens = 16000
 )
 
-// effort is set explicitly per stage. The segment rule is small; copy needs
-// more care.
 var effort = map[Stage]anthropic.OutputConfigEffort{
 	Segment: anthropic.OutputConfigEffortLow,
 	Content: anthropic.OutputConfigEffortMedium,
@@ -61,21 +48,15 @@ var (
 	ErrTotalTimeout = errors.New("llm: the call took longer than the total timeout")
 )
 
-// Config configures a Client. Nothing is read from the environment here.
 type Config struct {
 	BaseURL      string
 	APIKey       string
 	Model        string
 	Schemas      *schema.Set
-	StallTimeout time.Duration // no stream event for this long cancels the call
-	TotalTimeout time.Duration // a call older than this is cancelled
+	StallTimeout time.Duration
+	TotalTimeout time.Duration
 }
 
-// ConfigFromEnv reads LLM_MODE, ANTHROPIC_MODEL and, in anthropic mode only,
-// ANTHROPIC_API_KEY. It fails closed: an unknown mode or anthropic mode
-// without a key is an error. Mock mode never reads the key, so it cannot be
-// sent to the mock. MOCKLLM_URL overrides MockBaseURL. Schemas is left for
-// the caller.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	var c Config
 	switch getenv("LLM_MODE") {
@@ -96,16 +77,12 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	return c, nil
 }
 
-// Client calls the Messages API.
 type Client struct {
 	cfg     Config
 	sdk     anthropic.Client
 	schemas map[Stage]map[string]any
 }
 
-// New builds a client. The SDK's own retries are off, and its environment
-// defaults (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL and others) are skipped, so
-// only Config decides where requests go and what credential they carry.
 func New(cfg Config) (*Client, error) {
 	if cfg.BaseURL == "" || cfg.APIKey == "" || cfg.Schemas == nil {
 		return nil, errors.New("llm: Config needs BaseURL, APIKey and Schemas")
@@ -125,9 +102,7 @@ func New(cfg Config) (*Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		// ForAPI keeps numbers as json.Number, which the SDK's encoder
-		// writes as strings ("minItems": "1"). A round trip through
-		// encoding/json makes them plain numbers.
+		// Sayılar önce metin gibi duruyor, bir turdan sonra gerçek sayı oluyor.
 		b, err := json.Marshal(s)
 		if err != nil {
 			return nil, err
@@ -141,34 +116,27 @@ func New(cfg Config) (*Client, error) {
 	c.sdk = anthropic.NewClient(
 		option.WithoutEnvironmentDefaults(),
 		option.WithBaseURL(cfg.BaseURL),
-		// x-api-key, set by hand: WithAPIKey in this SDK version sends a
-		// bearer token instead.
+		// Anahtar elle konuyor çünkü hazır yardımcı onu yanlış başlıkla yolluyor.
 		option.WithHeader("X-Api-Key", cfg.APIKey),
 		option.WithMaxRetries(0),
-		option.WithHTTPClient(&http.Client{}), // the watchdog bounds every call
+		option.WithHTTPClient(&http.Client{}),
 	)
 	return c, nil
 }
 
-// Model is the model the client asks for.
 func (c *Client) Model() string { return c.cfg.Model }
 
-// Conversation is the message list of one stage. It is append-only: on Opus
-// 5.5, preserved thinking forbids editing earlier turns.
 type Conversation struct {
 	Stage    Stage
 	messages []anthropic.MessageParam
 }
 
-// NewConversation starts a stage with its first user turn.
 func NewConversation(stage Stage, firstTurn string) *Conversation {
 	return &Conversation{Stage: stage, messages: []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock(firstTurn)),
 	}}
 }
 
-// Repair appends the answer that failed, unchanged and with its thinking
-// blocks, then a user turn with the validation errors as JSON.
 func (c *Conversation) Repair(r Response, issues []validation.Issue) {
 	b, _ := json.Marshal(issues)
 	c.messages = append(c.messages, r.message.ToParam(),
@@ -176,8 +144,6 @@ func (c *Conversation) Repair(r Response, issues []validation.Issue) {
 			"Your previous answer failed validation. Fix every error below and answer again with the whole JSON object. Errors: "+string(b))))
 }
 
-// Response is one complete answer. A refusal or max_tokens is a Response,
-// not an error: the caller decides what to do with it.
 type Response struct {
 	Text         string
 	StopReason   string
@@ -188,9 +154,8 @@ type Response struct {
 	message      anthropic.Message
 }
 
-// CallError is a failed call, classified for the retry policy.
 type CallError struct {
-	Status     int // HTTP status, 0 for a transport failure
+	Status     int
 	Class      retry.Class
 	RetryAfter time.Duration
 	Err        error
@@ -205,11 +170,6 @@ func (e *CallError) Error() string {
 
 func (e *CallError) Unwrap() error { return e.Err }
 
-// Call sends the conversation and streams the answer. onText, if set,
-// receives each text delta as it arrives. A watchdog cancels the call when
-// no event arrives for StallTimeout (the wait for headers included) or the
-// call runs past TotalTimeout; both are CallErrors of class timeout.
-// When ctx itself ends, its error is returned as is.
 func (c *Client) Call(parent context.Context, conv *Conversation, onText func(string)) (Response, error) {
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
@@ -254,8 +214,8 @@ func (c *Client) Call(parent context.Context, conv *Conversation, onText func(st
 	if err := stream.Err(); err != nil {
 		return Response{}, c.callError(parent, ctx, err)
 	}
+	// Akış ara olay olmadan biterse bağlantı kopmuş sayılır.
 	if msg.StopReason == "" {
-		// The stream ended without message_delta: the connection died.
 		if cause := context.Cause(ctx); parent.Err() == nil && cause != nil {
 			return Response{}, c.callError(parent, ctx, cause)
 		}

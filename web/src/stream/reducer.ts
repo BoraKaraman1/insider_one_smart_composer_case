@@ -1,6 +1,3 @@
-// The pure reducer over generation events (plan 1.2). It never mutates its
-// input. Ids at or below lastEventId are replays and change nothing.
-
 import type { Issue } from '../api/issues'
 
 export interface GenEvent {
@@ -12,8 +9,8 @@ export interface GenEvent {
 export interface GenState {
   phase: 'idle' | 'streaming' | 'done' | 'failed'
   version: number | null
-  segment: unknown | null // the segment_ready payload: rule, description, counts
-  fields: Record<string, string> // sms.body, email.subject, email.body; provisional
+  segment: unknown | null
+  fields: Record<string, string>
   attempt: number
   errors: unknown[]
   lastEventId: number
@@ -23,8 +20,6 @@ export function initialState(): GenState {
   return { phase: 'idle', version: null, segment: null, fields: {}, attempt: 0, errors: [], lastEventId: 0 }
 }
 
-// issuesOf keeps the server's issues, or names the failure when it sent
-// none (a transport failure), so an error is never shown as nothing.
 function issuesOf(data: any, fallback: string): unknown[] {
   if (Array.isArray(data?.errors) && data.errors.length > 0) return data.errors
   const issue: Issue = { path: '', code: String(data?.reason ?? fallback), message: [data?.stage, data?.class].filter(Boolean).join(': ') || fallback }

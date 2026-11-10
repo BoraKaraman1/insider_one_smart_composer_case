@@ -8,10 +8,7 @@ import (
 	"testing"
 )
 
-// F5: the Go standard library ships with the compiler, so its security
-// fixes come only from the toolchain. go.mod's toolchain line and the
-// Dockerfile's base image pin the same patched release, and tests never run
-// on an older compiler.
+// Araç zinciri satırı ile imaj aynı yamalı sürümü sabitler.
 func TestToolchainPinned(t *testing.T) {
 	gomod, err := os.ReadFile("../../go.mod")
 	if err != nil {

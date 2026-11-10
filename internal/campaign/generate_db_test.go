@@ -30,11 +30,8 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
 )
 
-// exampleBrief is the brief from the case spec. The mock's demo brain turns
-// it into docs/examples/istanbul_cart_abandoners.json.
 const exampleBrief = "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder."
 
-// goodCopy is valid content for scripted replies.
 const goodCopy = `{"sms":{"body":"Merhaba {{first_name}}, sepetin seni bekliyor: {{campaign_url}}"},` +
 	`"email":{"subject":"Sepetindeki ürünler seni bekliyor","body":"Merhaba {{first_name}}, %30 indirim için: {{campaign_url}}"}}`
 
@@ -54,8 +51,6 @@ func genPool(t *testing.T) (*pgxpool.Pool, testdb.Seed) {
 	return p, meta
 }
 
-// sleepLog replaces the backoff sleep, so retries take no wall time and the
-// delays can be checked.
 type sleepLog struct {
 	mu     sync.Mutex
 	delays []time.Duration
@@ -74,8 +69,6 @@ func (s *sleepLog) list() []time.Duration {
 	return slices.Clone(s.delays)
 }
 
-// newGen builds a generator over its own in-process mock LLM, through the
-// real client and SDK. The watchdog is short so stall tests are quick.
 func newGen(t *testing.T, p *pgxpool.Pool, asOf time.Time, o mockllm.Options) (*Generator, *mockllm.Server, *sleepLog) {
 	t.Helper()
 	m := mockllm.New(o)
@@ -104,8 +97,6 @@ func newGen(t *testing.T, p *pgxpool.Pool, asOf time.Time, o mockllm.Options) (*
 	return g, m, sl
 }
 
-// insertGenerating puts a campaign straight into generating at version, as
-// StartGeneration leaves it.
 func insertGenerating(t *testing.T, p *pgxpool.Pool, brief string, version int) string {
 	t.Helper()
 	var id string
@@ -148,7 +139,6 @@ func llmCalls(t *testing.T, p *pgxpool.Pool, id string) []llmCall {
 	return out
 }
 
-// outcomes summarizes llm_calls rows as "stage attempt outcome class".
 func outcomes(calls []llmCall) []string {
 	var out []string
 	for _, c := range calls {
@@ -196,14 +186,13 @@ func eventTypes(events []genEvent) []string {
 	var out []string
 	for _, e := range events {
 		if len(out) > 0 && e.Type == "delta" && out[len(out)-1] == "delta" {
-			continue // a run of deltas reads as one
+			continue
 		}
 		out = append(out, e.Type)
 	}
 	return out
 }
 
-// rebuild concatenates the deltas of one content attempt per field.
 func rebuild(events []genEvent, attempt int) map[string]string {
 	out := map[string]string{}
 	for _, e := range events {
@@ -221,7 +210,7 @@ type genState struct {
 	State     State
 	Version   int
 	Revisions int
-	Audit     []string // "from>to actor"; reason wording is free
+	Audit     []string
 }
 
 func loadGen(t *testing.T, p *pgxpool.Pool, id string) genState {
@@ -246,7 +235,6 @@ func loadGen(t *testing.T, p *pgxpool.Pool, id string) genState {
 	return g
 }
 
-// recorded decodes the mock's recorded requests of one stage.
 func recorded(t *testing.T, m *mockllm.Server, stage mockllm.Stage) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -263,7 +251,6 @@ func recorded(t *testing.T, m *mockllm.Server, stage mockllm.Stage) []map[string
 	return out
 }
 
-// turns returns each message of a recorded request as "role: text".
 func turns(body map[string]any) []string {
 	msgs, _ := body["messages"].([]any)
 	var out []string
@@ -309,9 +296,6 @@ func run(t *testing.T, g *Generator, id string, version int) {
 	}
 }
 
-// TestGenerateHappyPath runs the spec's brief through both stages against
-// the demo brain: one valid revision, counts from docs/seed-data.md, one
-// llm_calls row per call, and the event log the reviewer's stream reads.
 func TestGenerateHappyPath(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -388,8 +372,6 @@ func TestGenerateHappyPath(t *testing.T) {
 		t.Errorf("done %v, want revision_id %s", done, current)
 	}
 
-	// The content stage sees our own description of the rule and the brief,
-	// never recipient rows.
 	contentReqs := recorded(t, m, mockllm.Content)
 	if len(contentReqs) != 1 {
 		t.Fatalf("%d content requests", len(contentReqs))
@@ -400,8 +382,6 @@ func TestGenerateHappyPath(t *testing.T) {
 	}
 }
 
-// With a long merge interval, each field's text arrives as at most one
-// delta per attempt: deltas are batched, not one event per token.
 func TestGenerateMergesDeltas(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -428,9 +408,6 @@ func TestGenerateMergesDeltas(t *testing.T) {
 	}
 }
 
-// TestGenerateRepairLoop: an invalid answer, then a valid one, ends in
-// review. The second request carries the first answer unchanged plus the
-// exact errors (rule 5).
 func TestGenerateRepairLoop(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -497,9 +474,6 @@ func normalizeIssues(t *testing.T, v any) any {
 	return out
 }
 
-// TestGenerateOutcomes covers refusal, max_tokens and transport failures.
-// Validation attempts and transport retries are counted separately; the
-// attempt column is the validation attempt.
 func TestGenerateOutcomes(t *testing.T) {
 	p, meta := genPool(t)
 	failures := slices.Repeat([]mockllm.Reply{mockllm.Status(503)}, MaxTransportRetries+1)
@@ -512,9 +486,9 @@ func TestGenerateOutcomes(t *testing.T) {
 		stage    mockllm.Stage
 		replies  []mockllm.Reply
 		state    State
-		reason   string // the failed event's reason
+		reason   string
 		calls    []string
-		requests int // requests of the scripted stage
+		requests int
 		sleeps   int
 	}{
 		{"refusal is not retried", mockllm.Content, []mockllm.Reply{mockllm.Refusal(), {Text: goodCopy}}, GenerationFailed, "refusal",
@@ -577,8 +551,6 @@ func TestGenerateOutcomes(t *testing.T) {
 	}
 }
 
-// Backoff waits come from retry: Retry-After when the server sends one,
-// otherwise full jitter within the first ceiling.
 func TestGenerateBackoffDelays(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, sl := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -591,8 +563,6 @@ func TestGenerateBackoffDelays(t *testing.T) {
 	}
 }
 
-// A job for an old version, or for a campaign that is no longer generating,
-// does nothing: no call to the model, no row, no event.
 func TestGenerateStaleJobDoesNothing(t *testing.T) {
 	p, meta := genPool(t)
 	cases := []struct {
@@ -626,8 +596,6 @@ func TestGenerateStaleJobDoesNothing(t *testing.T) {
 	}
 }
 
-// A cancel during generation stops it: the running call is not retried, no
-// revision is stored, and nothing is written after the failed event.
 func TestCancelDuringGeneration(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
@@ -671,8 +639,6 @@ func TestCancelDuringGeneration(t *testing.T) {
 	}
 }
 
-// failingInserter makes the job insert fail, to show the transition rolls
-// back with it.
 type failingInserter struct{}
 
 func (failingInserter) InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error) {
@@ -705,8 +671,6 @@ func generateJobs(t *testing.T, p *pgxpool.Pool) []jobRow {
 	return out
 }
 
-// StartGeneration moves the campaign to generating and enqueues the job in
-// one transaction, so neither can exist without the other.
 func TestStartGeneration(t *testing.T) {
 	p, _ := genPool(t)
 	ctx := context.Background()
@@ -732,8 +696,6 @@ func TestStartGeneration(t *testing.T) {
 		if got.State != Generating || got.Version != 8 || !slices.Equal(got.Audit, []string{string(from) + ">generating admin"}) {
 			t.Errorf("from %s: campaign %+v", from, got)
 		}
-		// The stream of this generation starts with its own event, so a
-		// reviewer never reads an older generation's done or failed.
 		events := genEvents(t, p, id)
 		if len(events) != 1 || events[0].Type != "started" || events[0].Payload["version"] != 8.0 {
 			t.Errorf("from %s: events %+v; want one started event", from, events)
@@ -761,7 +723,6 @@ func TestStartGeneration(t *testing.T) {
 				t.Fatal(err)
 			}
 		} else {
-			// Satisfy the approval CHECK so the fixture is a real approved campaign.
 			var rev string
 			if err := p.QueryRow(ctx, `INSERT INTO campaign_revisions (campaign_id, n, source, segment, sms_body, email_subject, email_body)
 				VALUES ($1, 1, 'llm', '{}', 's', 's', 'b') RETURNING id::text`, id).Scan(&rev); err != nil {
@@ -797,7 +758,6 @@ func TestStartGeneration(t *testing.T) {
 	}
 }
 
-// The River worker uses the generate timeout from internal/jobs.
 func TestGenerateWorkerTimeout(t *testing.T) {
 	w := NewGenerateWorker(&Generator{})
 	if got := w.Timeout(&river.Job[jobs.GenerateArgs]{}); got != jobs.GenerateTimeout {

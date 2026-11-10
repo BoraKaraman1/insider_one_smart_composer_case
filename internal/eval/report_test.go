@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// The golden briefs run end to end against the mock's demo brain, and the
-// report is written as markdown and as JSON with the header of plan 3.
 func TestGoldenRunWritesReport(t *testing.T) {
 	admin, tmpl := adminURL(t)
 	before := evalDatabases(t, admin)
@@ -31,7 +29,6 @@ func TestGoldenRunWritesReport(t *testing.T) {
 	if rep.Cases[len(cases)].Run != 2 {
 		t.Errorf("second run numbered %d", rep.Cases[len(cases)].Run)
 	}
-	// The demo brain reads the worked example right.
 	if rep.Cases[0].Name != "istanbul_cart_abandoners" || !rep.Cases[0].Result.Correct {
 		t.Errorf("worked example under the demo brain: %+v", rep.Cases[0])
 	}
@@ -58,7 +55,6 @@ func TestGoldenRunWritesReport(t *testing.T) {
 	if back.Mode != "mock" || back.Model != rep.Model || back.Numbers.Generations != rep.Numbers.Generations {
 		t.Errorf("JSON report header %q %q %d", back.Mode, back.Model, back.Numbers.Generations)
 	}
-	// No recipient data in either report.
 	if strings.Contains(text, "@") || strings.Contains(read(t, js), "@") {
 		t.Error("a report carries an email address")
 	}

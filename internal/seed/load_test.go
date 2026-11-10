@@ -44,8 +44,6 @@ func count(t *testing.T, pool *pgxpool.Pool, query string) int {
 func TestLoad(t *testing.T) {
 	ctx := context.Background()
 	pool := migratedPool(t)
-	// Nanoseconds on purpose: Generate truncates to microseconds, so the
-	// anchor and every timestamp must round-trip exactly.
 	ds := mustGenerate(t, 42, time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC), 500)
 
 	loaded, err := Load(ctx, pool, ds, false)
@@ -81,7 +79,6 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("template-looking name not stored literally: %d rows", n)
 	}
 
-	// Without reset, a second load changes nothing.
 	again := mustGenerate(t, 7, time.Now(), 300)
 	if loaded, err := Load(ctx, pool, again, false); err != nil || loaded {
 		t.Fatalf("second load without reset: loaded=%v err=%v", loaded, err)
@@ -90,7 +87,6 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("users after skipped load: %d", n)
 	}
 
-	// With reset, everything is replaced, campaigns included.
 	if _, err := pool.Exec(ctx, "INSERT INTO campaigns (brief) VALUES ('old campaign')"); err != nil {
 		t.Fatal(err)
 	}

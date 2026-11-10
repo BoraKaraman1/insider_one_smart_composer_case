@@ -13,9 +13,6 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
 )
 
-// Issues turns an error from Validate or ValidateDef into stable issues,
-// sorted by path. base is prepended to every path, so a check of one
-// condition can report /conditions/2/... paths.
 func Issues(err error, base string) []validation.Issue {
 	var ve *jsonschema.ValidationError
 	if !errors.As(err, &ve) {
@@ -29,7 +26,6 @@ func Issues(err error, base string) []validation.Issue {
 	return slices.Compact(out)
 }
 
-// collect walks to the leaf errors; inner nodes only group their causes.
 func collect(e *jsonschema.ValidationError, base string, out *[]validation.Issue) {
 	if len(e.Causes) > 0 {
 		for _, c := range e.Causes {
@@ -83,7 +79,6 @@ func collect(e *jsonschema.ValidationError, base string, out *[]validation.Issue
 	}
 }
 
-// Pointer renders an instance location as a JSON Pointer ("" for the root).
 func Pointer(loc []string) string {
 	var b strings.Builder
 	for _, tok := range loc {

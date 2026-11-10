@@ -1,7 +1,3 @@
-// The edit contract (plan 1.3). useDraft owns the unsaved text. Campaign
-// reloads go to observe() and never write into the draft; only useLatest()
-// discards it. A 409 keeps it, a 422 keeps it and maps the issues.
-
 import { computed, ref } from 'vue'
 import { ApiError } from '../api/client'
 import { mapIssues, type IssueMap } from '../api/issues'
@@ -36,7 +32,7 @@ export function useDraft() {
   const base = ref<Base | null>(null)
   const conflict = ref(false)
   const issues = ref<IssueMap | null>(null)
-  const latest = ref<CampaignView | null>(null) // the newest view seen, for Compare
+  const latest = ref<CampaignView | null>(null)
 
   const dirty = computed(() => {
     const d = draft.value
@@ -60,13 +56,11 @@ export function useDraft() {
     issues,
     latest,
 
-    // start fills the draft from the current revision, only when it is empty.
     start(v: CampaignView) {
       latest.value = v
       if (draft.value === null) reset(v)
     },
 
-    // observe records a reload. It never touches the draft.
     observe(v: CampaignView) {
       latest.value = v
     },
@@ -89,7 +83,7 @@ export function useDraft() {
       try {
         const v = await post(this.body())
         latest.value = v
-        // The text stays as typed; the saved revision becomes the base.
+        // Yazılan metin durur, kayıt yeni taban olur.
         base.value = baseOf(v)
         conflict.value = false
         issues.value = null
@@ -107,8 +101,6 @@ export function useDraft() {
       }
     },
 
-    // rebase is "Save on top of latest": the latest revision becomes the
-    // base, the text is kept.
     rebase(v: CampaignView) {
       latest.value = v
       const b = baseOf(v)
@@ -116,7 +108,6 @@ export function useDraft() {
       conflict.value = false
     },
 
-    // useLatest is "Use latest": discard the draft for the latest revision.
     useLatest(v: CampaignView) {
       latest.value = v
       reset(v)
