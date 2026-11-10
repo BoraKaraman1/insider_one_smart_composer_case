@@ -53,20 +53,23 @@ These targets are being added on day 1. If one is missing, it has not been built
 ## Layout and module boundaries
 
 ```
-cmd/app/            one binary, subcommands: api, worker, mockprovider, migrate, seed
+cmd/app/            one binary, subcommands: api, worker, mockllm, mockprovider, migrate, seed
 internal/schema/    embedded JSON Schemas, full and API-derived, validator
 internal/validation/ shared Issue{path, code, message} result type
-internal/segment/   DSL types, catalog, validator, compiler, consent filter
+internal/segment/   DSL types, catalog, validator, compiler, consent filter, Describe
 internal/content/   template parser, renderer, SMS encoding and length
-internal/campaign/  state machine, revisions
-internal/delivery/  fan-out and send workers, retry classifier, backoff, rate limiter
-internal/llm/       Claude client interface, real and fixture-replay implementations
+internal/campaign/  state machine, revisions, generate job, approve, completion
+internal/jobs/      River job args, queues and worker settings (shared contract)
+internal/retry/     error classifier and backoff, shared by the LLM and provider clients
+internal/delivery/  fan-out and send workers, rate limiter, provider client
+internal/llm/       Claude client over the SDK, prompts, partial JSON extractor
+internal/mockllm/   HTTP fake of the Messages API (tests and LLM_MODE=mock)
 internal/httpapi/   handlers, auth middleware, SSE
 internal/store/     pgx queries, migrations runner
 internal/seed/      deterministic seed generator and loader
 internal/testdb/    per-package test database cloned from a template
 internal/mockprovider/ fault-injecting provider with its own database
-schemas/  migrations/  web/  docs/
+schemas/  migrations/  deploy/  web/  docs/
 ```
 
 - Packages talk through small interfaces and the shared contracts in `schemas/` and `docs/`, never through each other's internals. This keeps modules workable in parallel sessions.

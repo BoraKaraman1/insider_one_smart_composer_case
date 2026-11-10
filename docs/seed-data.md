@@ -10,7 +10,7 @@ Synthetic recipients and events, so segment rules return realistic audiences. No
 
 Every timestamp is `asOf − offset`. The seeded random generator chooses the offsets, so the same seed always gives the same people, with the same event offsets, relative to whatever anchor is used.
 
-- **Compose seeds at load time.** The `setup` service runs `app seed -as-of now`. The data is fresh whenever the stack is seeded, so the counts below hold for a reviewer running it a week from now as well as today.
+- **Compose seeds at load time.** The `seed` service runs `app seed`, anchored at now. The data is fresh whenever the stack is seeded, so the counts below hold for a reviewer running it a week from now as well as today.
 - **Counts do not depend on the anchor.** Rules are evaluated relative to `asOf` (for example "cart_add within 30 days"). Because the data is relative to its own anchor, a rule gives the same count for any anchor. A test generates the same seed at two anchors and checks every offset and the example counts are equal.
 - **The anchor is recorded.** `seed_meta.as_of` stores it. The count endpoint returns it as `seeded_at`, next to its own `as_of` (now). If a database volume is kept for days, the two drift apart, so the drift is visible rather than silent. `make reseed` re-anchors at now.
 - **Tests pass a fixed `asOf`** (2026-01-01T00:00:00Z) and never depend on the wall clock.
@@ -70,6 +70,6 @@ The generator uses Go's `math/rand/v2` PCG source. Its output is stable within a
 
 ## Loading and resetting
 
-- **`app seed`** (no reset) writes nothing if any user exists. Running setup twice is safe.
+- **`app seed`** (no reset) writes nothing if any user exists. Running it twice is safe.
 - **`app seed -reset`** (`make reseed`) is a dev reset. It truncates users, events, `seed_meta` and every campaign, with its revisions, audit events, LLM calls and messages, then reloads anchored at the new `asOf`.
-- **Concurrency**: loaders take a Postgres advisory lock, so two setup runs at once cannot interleave.
+- **Concurrency**: loaders take a Postgres advisory lock, so two seed runs at once cannot interleave.

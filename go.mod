@@ -2,6 +2,8 @@ module github.com/BoraKaraman1/insider_one_smart_composer_case
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/anthropics/anthropic-sdk-go/v2 v2.8.0
 	github.com/jackc/pgx/v5 v5.12.0

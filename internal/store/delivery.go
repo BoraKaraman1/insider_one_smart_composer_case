@@ -115,12 +115,18 @@ func SkipMessage(ctx context.Context, db DB, id, class string) (bool, error) {
 }
 
 // ClaimMessage moves a message to sending for one attempt and counts it. A
-// message in sending may be claimed again: its last run crashed. It returns
-// the attempt number and the first attempt time, or ok false.
+// message in sending may be claimed again: its last run crashed. The claim
+// is the dispatch cutoff: it applies only while the recipient consents on
+// the message's channel and the campaign is not cancelled. It returns the
+// attempt number and the first attempt time, or ok false.
 func ClaimMessage(ctx context.Context, db DB, id string, now time.Time) (attempts int, first time.Time, ok bool, err error) {
-	err = db.QueryRow(ctx, `UPDATE messages SET state = 'sending', attempts = attempts + 1,
-			first_attempt_at = coalesce(first_attempt_at, $2), next_attempt_at = NULL, updated_at = now()
-		WHERE id = $1 AND state IN ('queued', 'sending') RETURNING attempts, first_attempt_at`, id, now).Scan(&attempts, &first)
+	err = db.QueryRow(ctx, `UPDATE messages m SET state = 'sending', attempts = m.attempts + 1,
+			first_attempt_at = coalesce(m.first_attempt_at, $2), next_attempt_at = NULL, updated_at = now()
+		FROM users u, campaigns c
+		WHERE m.id = $1 AND m.state IN ('queued', 'sending')
+			AND u.id = m.user_id AND c.id = m.campaign_id AND c.state <> 'cancelled'
+			AND CASE m.channel WHEN 'sms' THEN u.consent_sms ELSE u.consent_email END
+		RETURNING m.attempts, m.first_attempt_at`, id, now).Scan(&attempts, &first)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, time.Time{}, false, nil
 	}
@@ -178,10 +184,13 @@ func DeliveryStats(ctx context.Context, db DB, campaignID string) (map[string]ma
 }
 
 // Attention thresholds (rule 6). Sending for longer than twice the provider
-// timeout means the worker probably died.
+// timeout means the worker probably died. A message never attempted two
+// minutes after fan-out means nothing drains the queue: at 100/s per channel
+// that is 12,000 messages ahead of it, more than the seed's 5,000 users.
 const (
 	StuckSendingAfter = 10 * time.Second
 	OverdueAfter      = 30 * time.Second
+	NotStartedAfter   = 2 * time.Minute
 	ManyAttempts      = 3
 )
 
@@ -191,7 +200,7 @@ type AttentionItem struct {
 	Channel        string     `json:"channel"`
 	State          string     `json:"state"`
 	Attempts       int        `json:"attempts"`
-	Reason         string     `json:"reason"` // stuck_sending, overdue, many_attempts, failed, dead
+	Reason         string     `json:"reason"` // stuck_sending, not_started, overdue, many_attempts, failed, dead
 	LastErrorClass *string    `json:"last_error_class"`
 	LastError      *string    `json:"last_error"`
 	NextAttemptAt  *time.Time `json:"next_attempt_at"`
@@ -203,6 +212,7 @@ func Attention(ctx context.Context, db DB, campaignID string, now time.Time) ([]
 	rows, err := db.Query(ctx, `SELECT id::text, channel::text, state::text, attempts,
 			CASE
 				WHEN state = 'sending' THEN 'stuck_sending'
+				WHEN state = 'queued' AND attempts = 0 AND next_attempt_at IS NULL THEN 'not_started'
 				WHEN state = 'queued' AND next_attempt_at < $2::timestamptz - $3::interval THEN 'overdue'
 				WHEN state = 'queued' THEN 'many_attempts'
 				ELSE state::text
@@ -211,9 +221,10 @@ func Attention(ctx context.Context, db DB, campaignID string, now time.Time) ([]
 		FROM messages
 		WHERE campaign_id = $1 AND (
 			(state = 'sending' AND updated_at < $2::timestamptz - $4::interval)
+			OR (state = 'queued' AND attempts = 0 AND next_attempt_at IS NULL AND created_at < $2::timestamptz - $6::interval)
 			OR (state = 'queued' AND (attempts >= $5 OR next_attempt_at < $2::timestamptz - $3::interval))
 			OR state IN ('failed', 'dead'))
-		ORDER BY updated_at, id`, campaignID, now, OverdueAfter, StuckSendingAfter, ManyAttempts)
+		ORDER BY updated_at, id`, campaignID, now, OverdueAfter, StuckSendingAfter, ManyAttempts, NotStartedAfter)
 	if err != nil {
 		return nil, err
 	}

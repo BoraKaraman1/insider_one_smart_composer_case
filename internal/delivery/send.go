@@ -81,14 +81,8 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	if err != nil {
 		return err
 	}
-	if m.State != "queued" && m.State != "sending" {
-		return nil // terminal: never sent again
-	}
-	if campaign.State(m.CampaignState) == campaign.Cancelled {
-		return w.skip(ctx, log, m, "cancelled")
-	}
-	if !m.Consent {
-		return w.skip(ctx, log, m, "no_consent")
+	if done, err := w.gate(ctx, log, m); done {
+		return err
 	}
 
 	lim := w.Limiters[m.Channel]
@@ -98,10 +92,22 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	if err := lim.Wait(ctx); err != nil {
 		return err
 	}
+	// The claim is the dispatch cutoff. It checks consent and cancellation
+	// again, because either may have changed while we waited for the token.
 	now := w.Now()
 	attempts, first, ok, err := store.ClaimMessage(ctx, w.DB, id, now)
-	if err != nil || !ok {
-		return err // !ok: another run finished it
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if m, err = store.LoadSend(ctx, w.DB, id); err != nil {
+			return err
+		}
+		if done, err := w.gate(ctx, log, m); done {
+			return err
+		}
+		// Consent came back between the claim and this read: run again.
+		return fmt.Errorf("send: claim of %s did not apply", id)
 	}
 	payload, err := w.payload(m)
 	if err != nil {
@@ -145,6 +151,22 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	}
 	log.Info("message retry", "channel", m.Channel, "class", res.Class, "attempts", attempts, "delay_ms", delay.Milliseconds())
 	return river.JobSnooze(delay)
+}
+
+// gate decides whether a message may still be sent. It reports done for a
+// terminal message, which only gets the completion check again (an earlier
+// run may have failed it after the terminal update), and for a cancelled
+// campaign or a lost consent, which skip the message.
+func (w *SendWorker) gate(ctx context.Context, log *slog.Logger, m store.Send) (bool, error) {
+	switch {
+	case m.State != "queued" && m.State != "sending":
+		return true, w.finish(ctx, log, m, nil) // terminal: never sent again
+	case campaign.State(m.CampaignState) == campaign.Cancelled:
+		return true, w.skip(ctx, log, m, "cancelled")
+	case !m.Consent:
+		return true, w.skip(ctx, log, m, "no_consent")
+	}
+	return false, nil
 }
 
 func (w *SendWorker) skip(ctx context.Context, log *slog.Logger, m store.Send, class string) error {
@@ -222,14 +244,16 @@ func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (provi
 		return "", res, fmt.Sprintf("provider call failed: %s", res.Class)
 	}
 	defer resp.Body.Close()
+	// The status decides first: a broken body must not turn a permanent 4xx
+	// into a retryable read error. Only a success needs its body.
+	res = retry.Classify(resp, nil, time.Now())
+	if res.Class != retry.Success {
+		return "", res, fmt.Sprintf("provider answered %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
 		res := retry.Classify(nil, err, time.Now())
 		return "", res, fmt.Sprintf("reading the provider answer failed: %s", res.Class)
-	}
-	res = retry.Classify(resp, nil, time.Now())
-	if res.Class != retry.Success {
-		return "", res, fmt.Sprintf("provider answered %d", resp.StatusCode)
 	}
 	var out struct {
 		ID string `json:"id"`

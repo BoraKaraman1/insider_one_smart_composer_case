@@ -119,17 +119,7 @@ func apiCmd(ctx context.Context, log *slog.Logger) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = hs.Shutdown(shutdown)
-	}()
-	log.Info("api listening", "addr", cfg.ListenAddr, "auth_required", cfg.AdminToken != "")
-	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	return serve(ctx, log, hs, "api listening", "auth_required", cfg.AdminToken != "")
 }
 
 func migrate(ctx context.Context) error {

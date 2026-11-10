@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"time"
 
@@ -127,16 +128,40 @@ func mockllmHandler(getenv func(string) string) *mockllm.Server {
 	return mockllm.New(mockllm.Options{InvalidFirst: getenv("MOCKLLM_INVALID_FIRST") == "true"})
 }
 
-// serve runs hs until ctx ends, then shuts it down.
-func serve(ctx context.Context, log *slog.Logger, hs *http.Server, msg string) error {
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = hs.Shutdown(shutdown)
-	}()
-	log.Info(msg, "addr", hs.Addr)
-	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+// shutdownTimeout is how long active requests get to finish on shutdown.
+var shutdownTimeout = 10 * time.Second
+
+// serve listens on hs.Addr and runs hs until ctx ends. attrs are logged
+// with msg.
+func serve(ctx context.Context, log *slog.Logger, hs *http.Server, msg string, attrs ...any) error {
+	ln, err := net.Listen("tcp", hs.Addr)
+	if err != nil {
+		return err
+	}
+	return serveOn(ctx, log, hs, ln, msg, attrs...)
+}
+
+// serveOn runs hs on ln until ctx ends, then shuts it down. It returns only
+// after the active requests finished, or after shutdownTimeout, when the
+// remaining connections are closed. So the caller's deferred cleanup (the
+// database pool) never runs under a live handler.
+func serveOn(ctx context.Context, log *slog.Logger, hs *http.Server, ln net.Listener, msg string, attrs ...any) error {
+	errc := make(chan error, 1)
+	go func() { errc <- hs.Serve(ln) }()
+	log.Info(msg, append([]any{"addr", ln.Addr().String()}, attrs...)...)
+	select {
+	case err := <-errc:
+		return err // Serve failed on its own; ctx is still live
+	case <-ctx.Done():
+	}
+	drain, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := hs.Shutdown(drain); err != nil {
+		// Long-lived streams (SSE) keep their connections open until here.
+		log.Warn("shutdown timed out; closing the remaining connections", "timeout", shutdownTimeout.String(), "error", err)
+		_ = hs.Close()
+	}
+	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

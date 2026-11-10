@@ -1,7 +1,13 @@
 name: smart-campaign-composer
 
 # docker compose up: Postgres, then migrate, then seed (anchored at now, a
-# no-op if data exists), then the api on http://127.0.0.1:8080.
+# no-op if data exists), then the api on http://127.0.0.1:8080, the worker,
+# the mock LLM and the mock provider (stats on http://127.0.0.1:8091).
+#
+# LLM_MODE defaults to mock, so the stack runs without a key. Only the
+# worker calls Claude and the provider, so only the worker reads the
+# optional .env (for ANTHROPIC_API_KEY when LLM_MODE=anthropic). With
+# LLM_MODE=anthropic and no key, the worker refuses to start.
 # The api needs ADMIN_TOKEN; the default below is a dev token, shown in the
 # README. Compose never starts the api unauthenticated.
 
@@ -19,6 +25,8 @@ services:
       POSTGRES_DB: app
     volumes:
       - pgdata:/var/lib/postgresql
+      # Creates the mock provider's own role and database on a new volume.
+      - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
       interval: 2s
@@ -46,11 +54,68 @@ services:
       DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
       LISTEN_ADDR: ":8080"
+      # Hosts a campaign_url may point at; without one no campaign can be created.
+      CAMPAIGN_URL_HOSTS: ${CAMPAIGN_URL_HOSTS:-shop.example}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
       seed:
         condition: service_completed_successfully
+
+  # Runs the generate, fan-out and send jobs. The only container that may
+  # get the API key.
+  worker:
+    <<: *app
+    command: ["worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
+      LLM_MODE: ${LLM_MODE:-mock}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+      MOCKLLM_URL: http://mockllm:8090
+      PROVIDER_URL: http://mockprovider:8091
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      mockllm:
+        condition: service_started
+      mockprovider:
+        condition: service_started
+
+  # Fake Messages API for LLM_MODE=mock. No database, no key.
+  mockllm:
+    <<: *app
+    command: ["mockllm"]
+    environment:
+      MOCKLLM_ADDR: ":8090"
+      # true: the first answer of each stage is invalid, to show the repair loop.
+      MOCKLLM_INVALID_FIRST: ${MOCKLLM_INVALID_FIRST:-false}
+
+  # Fake SMS and email provider with fault injection, on its own database
+  # and role. Rates are shares of requests; see internal/mockprovider.
+  mockprovider:
+    <<: *app
+    command: ["mockprovider"]
+    environment:
+      MOCKPROVIDER_DATABASE_URL: postgres://mockprovider:mockprovider@postgres:5432/mockprovider?sslmode=disable
+      MOCKPROVIDER_ADDR: ":8091"
+      MOCKPROVIDER_SEED: ${MOCKPROVIDER_SEED:-42}
+      MOCKPROVIDER_LATENCY: ${MOCKPROVIDER_LATENCY:-20ms}
+      MOCKPROVIDER_RETRY_AFTER: ${MOCKPROVIDER_RETRY_AFTER:-2s}
+      MOCKPROVIDER_RATE_500: ${MOCKPROVIDER_RATE_500:-0.05}
+      MOCKPROVIDER_RATE_503: ${MOCKPROVIDER_RATE_503:-0.05}
+      MOCKPROVIDER_RATE_429: ${MOCKPROVIDER_RATE_429:-0.05}
+      MOCKPROVIDER_RATE_429_NO_RETRY_AFTER: ${MOCKPROVIDER_RATE_429_NO_RETRY_AFTER:-0}
+      MOCKPROVIDER_RATE_HANG: ${MOCKPROVIDER_RATE_HANG:-0.02}
+      MOCKPROVIDER_RATE_DROP: ${MOCKPROVIDER_RATE_DROP:-0.03}
+      MOCKPROVIDER_RATE_LATE: ${MOCKPROVIDER_RATE_LATE:-0}
+    ports:
+      - "127.0.0.1:8091:8091" # GET /v1/stats
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Throwaway server for make test: in memory, removed after the run.
   postgres-test:

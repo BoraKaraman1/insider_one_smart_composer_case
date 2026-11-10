@@ -5,8 +5,12 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/content"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
@@ -474,5 +478,106 @@ func TestUnknownMessage(t *testing.T) {
 	}
 	if errors.Is(err, errCrash) || len(e.prov.all()) != 0 {
 		t.Error("an unknown message reached the provider")
+	}
+}
+
+// hookLimiter runs a hook while the worker waits for its token.
+type hookLimiter struct{ during func() }
+
+func (h hookLimiter) Wait(ctx context.Context) error {
+	h.during()
+	return ctx.Err()
+}
+
+// F1: consent revoked while the worker waits for its token stops the send.
+// The claim, after the token, is the dispatch cutoff.
+func TestConsentRevokedWhileWaitingForToken(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	user := consentingUsers(t, e.pool, 1)[0]
+	id := insertMessage(t, e.pool, c, user, "sms", "")
+	e.worker.Limiters["sms"] = hookLimiter{during: func() {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE users SET consent_sms = false WHERE id = $1`, user); err != nil {
+			t.Error(err)
+		}
+	}}
+
+	if err := e.work(id); err != nil {
+		t.Fatalf("work: %v", err)
+	}
+	if n := len(e.prov.callsFor(id)); n != 0 {
+		t.Fatalf("%d provider calls after consent was revoked", n)
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "skipped" || str(m.LastErrorClass) != "no_consent" || m.Attempts != 0 {
+		t.Errorf("message %+v; want skipped, no_consent, 0 attempts", m)
+	}
+	if state, _ := campaignState(t, e.pool, c.ID); state != "completed" {
+		t.Errorf("campaign %s, want completed", state)
+	}
+}
+
+// The same cutoff holds for a campaign cancelled during the wait.
+func TestCancelledWhileWaitingForToken(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.worker.Limiters["sms"] = hookLimiter{during: func() {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE campaigns SET state = 'cancelled' WHERE id = $1`, c.ID); err != nil {
+			t.Error(err)
+		}
+	}}
+
+	if err := e.work(id); err != nil {
+		t.Fatalf("work: %v", err)
+	}
+	if n := len(e.prov.all()); n != 0 {
+		t.Fatalf("%d provider calls for a cancelled campaign", n)
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "skipped" || str(m.LastErrorClass) != "cancelled" {
+		t.Errorf("message %+v; want skipped, cancelled", m)
+	}
+}
+
+// failFirstBegin is the app database, except that its first transaction
+// fails. The send worker's first transaction is the completion check.
+type failFirstBegin struct {
+	*pgxpool.Pool
+	failed atomic.Bool
+}
+
+func (d *failFirstBegin) Begin(ctx context.Context) (pgx.Tx, error) {
+	if d.failed.CompareAndSwap(false, true) {
+		return nil, errCrash
+	}
+	return d.Pool.Begin(ctx)
+}
+
+// F2: the message is sent but the completion check fails. The job's retry
+// finds a terminal message and still completes the campaign, without a
+// second provider call.
+func TestCompletionRetriedAfterTerminalUpdate(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.worker.DB = &failFirstBegin{Pool: e.pool}
+
+	if err := e.work(id); !errors.Is(err, errCrash) {
+		t.Fatalf("first run: %v; want the completion check's error, so River retries", err)
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "sent" {
+		t.Fatalf("message %+v; want sent", m)
+	}
+	if state, _ := campaignState(t, e.pool, c.ID); state != "sending" {
+		t.Fatalf("campaign %s after the failed check, want sending", state)
+	}
+
+	if err := e.work(id); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if state, _ := campaignState(t, e.pool, c.ID); state != "completed" {
+		t.Errorf("campaign %s after the retry, want completed", state)
+	}
+	if n := len(e.prov.callsFor(id)); n != 1 {
+		t.Errorf("%d provider calls, want 1", n)
 	}
 }
