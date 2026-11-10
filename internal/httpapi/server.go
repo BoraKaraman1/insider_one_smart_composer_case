@@ -42,7 +42,7 @@ type Server struct {
 	Schemas *schema.Set
 	Log     *slog.Logger
 	Now     func() time.Time
-	// Kuyruk istemcisi yalnızca iş ekler ve iptal eder, üretim ile onay durum geçişiyle aynı işlemde kuyruğa girer.
+	// Kuyruk istemcisi işi ekler, çalıştırmaz.
 	River *river.Client[pgx.Tx]
 	// Bildirim merkezi yoksa akışlar yalnızca yoklama yapar.
 	Hub          *Hub

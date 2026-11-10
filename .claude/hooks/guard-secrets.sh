@@ -7,14 +7,12 @@ block() {
   exit 2
 }
 
-# Fail closed: if we cannot inspect the call, we do not allow it.
 command -v jq >/dev/null 2>&1 || block "jq is not installed, so the guard cannot inspect this call"
 
 input=$(cat)
 tool=$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null) || block "could not parse hook input"
 
-# Matches .env, .env.local, .env.production, ... anywhere in a string.
-# .env.example is removed before matching because it is the committed template.
+# .env.example şablon olduğu için eşleşmeden önce çıkarılır.
 env_ref='(^|[^A-Za-z0-9_])\.env([^A-Za-z0-9_]|$)'
 key_like='sk-ant-[A-Za-z0-9_-]{8,}'
 
@@ -53,21 +51,15 @@ case "$tool" in
     grep -Eq -- "$key_like" <<<"$cmd" && block "command contains something that looks like an Anthropic API key"
 
     patterns=(
-      # Expanding the key or token into a command.
       '\$\{?(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)'
-      # Dumping the environment.
       '(^|[^A-Za-z0-9_-])printenv([^A-Za-z0-9_-]|$)'
       '(^|[;&|(]|then|do)[[:space:]]*(env|export|set|declare|typeset)[[:space:]]*($|[;&|)>])'
       '(^|[^A-Za-z0-9_-])export[[:space:]]+-p'
       '(^|[^A-Za-z0-9_-])(declare|typeset)[[:space:]]+-[A-Za-z]*[xp]'
       '/proc/[^[:space:]]*/environ'
-      # macOS ps: -e / e prints each process environment.
       '(^|[^A-Za-z0-9_-])ps[[:space:]]+(-[A-Za-z]*[eE]|[A-Za-z]*e)'
-      # docker compose config renders .env values into the output.
       'docker(-compose|[[:space:]]+compose)([[:space:]].*)?[[:space:]]config([[:space:]]|$)'
-      # docker inspect shows container env vars.
       'docker[[:space:]]+(container[[:space:]]+)?inspect([[:space:]]|$)'
-      # Printing env inside a container.
       'docker.*[[:space:]]exec[[:space:]].*(^|[[:space:]])(env|printenv)([[:space:]]|$)'
     )
     for p in "${patterns[@]}"; do

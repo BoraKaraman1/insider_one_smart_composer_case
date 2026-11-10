@@ -1,25 +1,16 @@
 #!/usr/bin/env bash
-# Git pre-commit hook. Install with `make hooks` (sets core.hooksPath).
-#
-# Blocks the commit when:
-#   1. an env file other than .env.example is staged,
-#   2. a staged added line contains something that looks like an Anthropic API key,
-#   3. a staged .go file is not gofmt-formatted,
-#   4. go vet fails (only when Go files are staged).
-# Matched key values are never printed, only the file names.
+# Aşamaya env dosyası veya anahtar benzeri satır girerse commit durur. Eşleşen değer yazılmaz.
 set -uo pipefail
 
 key_re='sk-ant-[A-Za-z0-9_-]{8,}'
 fail=0
 err() { echo "pre-commit: $*" >&2; fail=1; }
 
-# Staged paths that are added, copied, modified or renamed.
 staged=()
 while IFS= read -r -d '' path; do
   staged+=("$path")
 done < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
-# 1. Env files.
 go_files=()
 for path in ${staged[@]+"${staged[@]}"}; do
   base=${path##*/}
@@ -29,7 +20,7 @@ for path in ${staged[@]+"${staged[@]}"}; do
   [[ "$path" == *.go ]] && go_files+=("$path")
 done
 
-# 2. Key-shaped strings in added lines (removing a key must stay possible).
+# Silinen satır bakılmaz, anahtarı çıkarmak serbest kalsın.
 key_files=$(git diff --cached -U0 --no-color --no-ext-diff \
   | awk '/^\+\+\+ /{file=substr($0,7); next} /^\+/{print file "\t" substr($0,2)}' \
   | grep -E -- "$key_re" | cut -f1 | sort -u)
@@ -37,7 +28,6 @@ if [[ -n "$key_files" ]]; then
   while IFS= read -r f; do err "key-shaped string added in $f (value not shown)"; done <<<"$key_files"
 fi
 
-# 3 and 4. Go formatting (checked on the staged content) and vet.
 if (( ${#go_files[@]} > 0 )); then
   if ! command -v gofmt >/dev/null 2>&1; then
     err "gofmt not found, cannot check staged Go files"

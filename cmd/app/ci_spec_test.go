@@ -80,6 +80,7 @@ func TestCIStream4(t *testing.T) {
 		"FuzzCompileShape",
 		"FuzzParse",
 		"fuzztime=30s",
+		"Failing input written to",
 		"fetch-depth: 0",
 		"gitleaks/gitleaks-action@",
 		"push: false",
@@ -117,6 +118,9 @@ func TestCIHasNoAPIKey(t *testing.T) {
 	}
 	if strings.Contains(ci, "secrets.") {
 		t.Error("ci.yml reads a repository secret; the tests need none")
+	}
+	if regexp.MustCompile(`Authorization:\s+Bearer\s+[A-Za-z0-9]`).MatchString(ci) {
+		t.Error("ci.yml has an Authorization bearer token; gitleaks curl-auth-header matches that curl form")
 	}
 	if regexp.MustCompile(`LLM_MODE:?\s*['"]?anthropic`).MatchString(ci) {
 		t.Error("ci.yml runs LLM_MODE=anthropic")

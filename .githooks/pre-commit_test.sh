@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Tests for .githooks/pre-commit. Each case builds a throwaway git repo that
-# uses this hooks directory, stages something and tries to commit.
-# Usage: pre-commit_test.sh [hooks-dir]   (defaults to this directory)
 set -uo pipefail
 
 HOOKS_DIR="${1:-$(cd "$(dirname "$0")" && pwd)}"
-# Ignore the user's git config so the test is hermetic.
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-# Built from pieces so no file in the repo holds a key-shaped string.
+# Parça parça ki depoda anahtar biçiminde düz metin durmasın.
 fake_key="sk-""ant-""api03-abcdefghijklmnopqrstuv"
 
 pass=0; fail=0

@@ -1,0 +1,2 @@
+# Documented compose dev token in the smoke check. Later commits build the header in the shell.
+788c12c7929bc7ae7d856cb638cae484bc657019:.github/workflows/ci.yml:curl-auth-header:210

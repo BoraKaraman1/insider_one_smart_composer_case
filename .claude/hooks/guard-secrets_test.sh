@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Table test for .claude/hooks/guard-secrets.sh.
-# Usage: guard-secrets_test.sh [path-to-hook]   (defaults to the sibling hook)
 HOOK="${1:-$(cd "$(dirname "$0")" && pwd)/guard-secrets.sh}"
 pass=0; fail=0
-# Built from pieces so no file in the repo holds a key-shaped string.
+# Parça parça ki depoda anahtar biçiminde düz metin durmasın.
 fake_key="sk-""ant-""api03-abcdefghijklmnopqrstuv"
 
 run() { # want(0|2) label json
@@ -15,7 +13,7 @@ b() { run "$1" "Bash: $2" "$(jq -nc --arg c "$2" '{tool_name:"Bash",tool_input:{
 f() { run "$1" "$2: $3" "$(jq -nc --arg t "$2" --arg p "$3" --arg c "${4-}" '{tool_name:$t,tool_input:{file_path:$p,content:$c,new_string:$c}}')"; }
 g() { run "$1" "Grep: $2 | $3" "$(jq -nc --arg p "$2" --arg gl "$3" '{tool_name:"Grep",tool_input:{pattern:"KEY",path:$p,glob:$gl}}')"; }
 
-# --- must block (2)
+# kesilmesi gerekenler
 for c in 'cat .env' 'cat ./.env' 'source .env' 'set -a; . .env; set +a' 'grep KEY .env.local' \
          'git show HEAD:.env' 'cp .env.example .env' 'printenv' 'printenv ANTHROPIC_API_KEY' 'env' \
          'env | grep ANTH' 'echo $ANTHROPIC_API_KEY' 'echo "${ANTHROPIC_API_KEY}"' 'docker compose config' \
@@ -35,7 +33,7 @@ g 2 /repo/.env ""
 g 2 /repo ".env*"
 run 2 "garbage input" 'not json'
 
-# --- must allow (0)
+# geçmesi gerekenler
 for c in 'cat .env.example' 'cp .env.example .env.example.bak' 'go test ./...' \
          'grep -rn ANTHROPIC_API_KEY internal/' 'env FOO=1 go test ./...' 'docker compose up -d --build' \
          "docker compose exec db psql -U app -c 'select 1'" 'set -euo pipefail' 'export FOO=bar' \

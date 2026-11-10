@@ -1,4 +1,3 @@
-// Paket onaylı kampanyayı mesajlara böler ve gönderir.
 package delivery
 
 import (
