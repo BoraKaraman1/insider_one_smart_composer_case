@@ -4,6 +4,10 @@
 TEST_PG := postgres://postgres:test@127.0.0.1:55432
 TEMPLATE_URL := $(TEST_PG)/app_template?sslmode=disable
 
+# Build tags for go test. TAGS=spec adds the third plan's test-first specs
+# (files with //go:build spec), which stay red until their stream lands.
+TAGS ?=
+
 # The whole stack: migrate, seed (anchored at now), api.
 up:
 	docker compose up --build
@@ -24,7 +28,7 @@ test:
 	docker compose exec -T postgres-test psql -q -U postgres -c 'DROP DATABASE IF EXISTS app_template' -c 'CREATE DATABASE app_template'; \
 	DATABASE_URL='$(TEMPLATE_URL)' go run ./cmd/app migrate; \
 	DATABASE_URL='$(TEMPLATE_URL)' go run ./cmd/app seed -as-of 2026-01-01T00:00:00Z -seed 42 -users 5000; \
-	env -u ANTHROPIC_API_KEY TEST_DATABASE_URL='$(TEST_PG)/postgres?sslmode=disable' REQUIRE_DB=1 go test -count=1 ./...; \
+	env -u ANTHROPIC_API_KEY TEST_DATABASE_URL='$(TEST_PG)/postgres?sslmode=disable' REQUIRE_DB=1 go test -count=1 -tags '$(TAGS)' ./...; \
 	$(MAKE) -s test-hooks
 
 # Tests that need no database (integration tests skip).
