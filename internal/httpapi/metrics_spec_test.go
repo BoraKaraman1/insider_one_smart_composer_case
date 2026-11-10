@@ -1,5 +1,3 @@
-//go:build spec
-
 package httpapi
 
 import (
@@ -104,6 +102,7 @@ func TestMetricsSSEStreams(t *testing.T) {
 		t.Errorf("one open stream: sse_streams = %v", n)
 	}
 	addGenEvent(t, p, id, "done", map[string]any{})
+	sseNext(t, frames, 4*time.Second)
 	sseEnded(t, frames, 4*time.Second)
 	deadline := time.Now().Add(2 * time.Second)
 	for metricstest.Scrape(t, reg.Handler()).Get("sse_streams") != 0 {

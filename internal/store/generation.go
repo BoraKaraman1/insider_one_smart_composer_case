@@ -54,6 +54,18 @@ func ListGenerationEvents(ctx context.Context, db DB, campaignID string, after i
 	})
 }
 
+// LatestStartedEventID returns the id of a campaign's newest started event.
+// ok is false when the campaign never had a generation.
+func LatestStartedEventID(ctx context.Context, db DB, campaignID string) (int64, bool, error) {
+	var n *int64
+	err := db.QueryRow(ctx, `SELECT max(id) FROM generation_events WHERE campaign_id = $1 AND type = 'started'`,
+		campaignID).Scan(&n)
+	if err != nil || n == nil {
+		return 0, false, err
+	}
+	return *n, true, nil
+}
+
 // LockGenerating locks a campaign row against transitions for the rest of
 // the transaction, if the campaign is still generating at version. A
 // generation job writes nothing unless this holds, so a cancel or a newer

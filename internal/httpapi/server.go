@@ -51,7 +51,20 @@ type Server struct {
 	Hub          *Hub
 	Heartbeat    time.Duration // SSE heartbeat; DefaultHeartbeat if zero
 	PollInterval time.Duration // SSE poll; DefaultPollInterval if zero
+	// Metrics serves GET /metrics outside auth and counts requests. Nil
+	// serves and counts nothing.
+	Metrics Metrics
 }
+
+// Metrics is what the API reports. *metrics.Registry satisfies it.
+type Metrics interface {
+	Handler() http.Handler
+	HTTPRequest(route string, status int)
+	SSEStreams(delta int)
+}
+
+// eventsRoute is the SSE route, counted by sse_streams.
+const eventsRoute = "GET /api/campaigns/{id}/events"
 
 // Handler builds the routes. It refuses to build an open API: with no token,
 // ALLOW_UNAUTHENTICATED must have been set explicitly.
@@ -77,7 +90,36 @@ func (s *Server) Handler() (http.Handler, error) {
 	// Everything under /api is behind auth, unknown paths included, so an
 	// unauthenticated caller cannot map the routes.
 	mux.Handle("/api/", s.auth(api))
-	return s.requestID(s.logRequests(mux)), nil
+	var h http.Handler = mux
+	if s.Metrics != nil {
+		mux.Handle("GET /metrics", s.Metrics.Handler())
+		s.Metrics.SSEStreams(0) // exposed at 0 before the first stream
+		h = s.countRequests(mux, api)
+	}
+	return s.requestID(s.logRequests(h)), nil
+}
+
+// countRequests counts each request by its mux pattern, never by its path,
+// so no id becomes a label value. Routes under /api are resolved on the
+// inner mux even when auth rejects the request. A path no pattern matches
+// is "unmatched". Event stream requests in flight move sse_streams.
+func (s *Server) countRequests(mux, api *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, route := mux.Handler(r)
+		if route == "/api/" {
+			_, route = api.Handler(r)
+		}
+		if route == "" {
+			route = "unmatched"
+		}
+		if route == eventsRoute {
+			s.Metrics.SSEStreams(1)
+			defer s.Metrics.SSEStreams(-1)
+		}
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		mux.ServeHTTP(sw, r)
+		s.Metrics.HTTPRequest(route, sw.status)
+	})
 }
 
 type ctxKey struct{}

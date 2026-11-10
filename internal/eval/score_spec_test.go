@@ -1,5 +1,3 @@
-//go:build spec
-
 package eval
 
 // Plan 3, stream 2. Contract assumed by these tests (internal/eval):

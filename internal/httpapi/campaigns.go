@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"strconv"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/campaign"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
@@ -104,11 +105,26 @@ func version(m map[string]any, res *validation.Result) int {
 	return int(i)
 }
 
-// campaignView is a campaign with its current revision and audit trail.
+// campaignView is a campaign with its current revision, audit trail and
+// the cursor of its latest generation.
 type campaignView struct {
-	Campaign store.Campaign  `json:"campaign"`
-	Revision *store.Revision `json:"revision"`
-	Events   []store.Event   `json:"events"`
+	Campaign   store.Campaign  `json:"campaign"`
+	Revision   *store.Revision `json:"revision"`
+	Events     []store.Event   `json:"events"`
+	Generation *generationView `json:"generation"`
+}
+
+// generationView lets a client reopen the latest generation's stream after
+// a page refresh. It is null before the first generation.
+type generationView struct {
+	EventsURL string `json:"events_url"`
+}
+
+// eventsURL is the stream of the generation whose started event has id
+// started. The stream begins at that event, so an older generation's done
+// or failed is never read as this one's.
+func eventsURL(id string, started int64) string {
+	return "/api/campaigns/" + id + "/events?after=" + strconv.FormatInt(started-1, 10)
 }
 
 func (s *Server) loadView(ctx context.Context, id string) (campaignView, error) {
@@ -131,6 +147,13 @@ func (s *Server) loadView(ctx context.Context, id string) (campaignView, error) 
 	}
 	if v.Events == nil {
 		v.Events = []store.Event{}
+	}
+	started, ok, err := store.LatestStartedEventID(ctx, s.Pool, id)
+	if err != nil {
+		return v, err
+	}
+	if ok {
+		v.Generation = &generationView{EventsURL: eventsURL(id, started)}
 	}
 	return v, nil
 }

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"strconv"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/campaign"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/validation"
@@ -24,9 +23,8 @@ type generateResponse struct {
 }
 
 // generate moves the campaign to generating and enqueues the job in one
-// transaction. It answers 202 with the URL of this generation's events: the
-// stream starts at its started event, so an older generation's done or
-// failed is never read as this one's.
+// transaction. It answers 202 with the URL of this generation's events,
+// built by eventsURL like the campaign view's, so both agree.
 func (s *Server) generate(w http.ResponseWriter, r *http.Request, id string) {
 	doc, ok := decodeBody(w, r)
 	if !ok {
@@ -52,6 +50,6 @@ func (s *Server) generate(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	writeJSON(w, http.StatusAccepted, generateResponse{
 		Version:   args.Version,
-		EventsURL: "/api/campaigns/" + id + "/events?after=" + strconv.FormatInt(started-1, 10),
+		EventsURL: eventsURL(id, started),
 	})
 }

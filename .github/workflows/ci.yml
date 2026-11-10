@@ -1,0 +1,80 @@
+# Minimal CI (third plan, step 0). The go job runs what make lint and
+# make test run. Stream 1 adds the web job; stream 4 extends the rest.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test # throwaway CI server only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 1s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # Rule 1: CI never has the key. Tests run in mock mode.
+      ANTHROPIC_API_KEY: ""
+      PGPASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: unit tests
+        run: go test -count=1 ./...
+      - name: build the test template
+        env:
+          DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/app_template?sslmode=disable
+        run: |
+          psql -h 127.0.0.1 -U postgres -q -c 'CREATE DATABASE app_template'
+          go run ./cmd/app migrate
+          go run ./cmd/app seed -as-of 2026-01-01T00:00:00Z -seed 42 -users 5000
+      - name: integration tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
+          REQUIRE_DB: "1"
+        run: go test -count=1 ./...
+      - name: hook tests
+        run: make -s test-hooks
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+      - name: unit tests
+        run: npm test
+      - name: build
+        run: npm run build

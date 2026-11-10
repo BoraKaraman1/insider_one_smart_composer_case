@@ -74,8 +74,36 @@ type Generator struct {
 	// in the worker). Zero writes every delta.
 	DeltaInterval time.Duration
 	Log           *slog.Logger
+	// Metrics counts LLM calls and times generations. Nil counts nothing.
+	Metrics Metrics
 
 	mu sync.Mutex
+}
+
+// Metrics is what the generator reports. *metrics.Registry satisfies it.
+// Outcomes of LLMRequest are the llm_calls outcomes; Generation gets done
+// or failed.
+type Metrics interface {
+	LLMRequest(stage, outcome string, d time.Duration)
+	LLMTokens(stage string, input, output int)
+	LLMValidationFailure(stage, rule string)
+	Generation(outcome string, d time.Duration)
+	JobProcessed(at time.Time)
+}
+
+type noMetrics struct{}
+
+func (noMetrics) LLMRequest(string, string, time.Duration) {}
+func (noMetrics) LLMTokens(string, int, int)               {}
+func (noMetrics) LLMValidationFailure(string, string)      {}
+func (noMetrics) Generation(string, time.Duration)         {}
+func (noMetrics) JobProcessed(time.Time)                   {}
+
+func (g *Generator) metrics() Metrics {
+	if g.Metrics != nil {
+		return g.Metrics
+	}
+	return noMetrics{}
 }
 
 // errStop means the campaign is no longer generating at the job's version
@@ -89,7 +117,15 @@ var errStop = errors.New("campaign: generation no longer current")
 // still generating), so River can retry it.
 func (g *Generator) Run(ctx context.Context, args jobs.GenerateArgs) error {
 	r := &genRun{g: g, id: args.CampaignID, version: args.Version}
+	start := time.Now()
 	err := r.run(ctx)
+	met := g.metrics()
+	if r.outcome != "" {
+		// Observed once per generation that reached done or failed; a
+		// stopped or interrupted run has no outcome.
+		met.Generation(r.outcome, time.Since(start))
+	}
+	met.JobProcessed(time.Now())
 	if errors.Is(err, errStop) {
 		return nil
 	}
@@ -107,6 +143,7 @@ type genRun struct {
 	g       *Generator
 	id      string
 	version int
+	outcome string // done or failed, once written
 }
 
 func (r *genRun) log() *slog.Logger {
@@ -213,7 +250,7 @@ func (r *genRun) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.write(ctx, func(tx pgx.Tx) error {
+	return r.wrote("done", r.write(ctx, func(tx pgx.Tx) error {
 		if err := Transition(ctx, tx, Move{ID: r.id, From: Generating, To: InReview, Version: r.version, Actor: WorkerActor, Reason: "generated"}); err != nil {
 			return err
 		}
@@ -227,7 +264,15 @@ func (r *genRun) run(ctx context.Context) error {
 		}
 		_, err = store.InsertGenerationEvent(ctx, tx, r.id, "done", map[string]any{"revision_id": rev.ID})
 		return err
-	})
+	}))
+}
+
+// wrote records the run's outcome when its final write applied.
+func (r *genRun) wrote(outcome string, err error) error {
+	if err == nil {
+		r.outcome = outcome
+	}
+	return err
 }
 
 // failure is how a stage failed: a reason and the errors to show.
@@ -248,14 +293,14 @@ func (r *genRun) finish(ctx context.Context, err error, f *failure) error {
 		errs = []validation.Issue{}
 	}
 	r.log().Warn("generation failed", "campaign_id", r.id, "stage", f.stage, "reason", f.reason, "errors", len(errs))
-	return r.write(ctx, func(tx pgx.Tx) error {
+	return r.wrote("failed", r.write(ctx, func(tx pgx.Tx) error {
 		if err := Transition(ctx, tx, Move{ID: r.id, From: Generating, To: GenerationFailed, Version: r.version,
 			Actor: WorkerActor, Reason: f.reason}); err != nil {
 			return err
 		}
 		_, err := store.InsertGenerationEvent(ctx, tx, r.id, "failed", map[string]any{"reason": f.reason, "stage": f.stage, "errors": errs})
 		return err
-	})
+	}))
 }
 
 // stage runs one stage: up to MaxValidationAttempts answers, each after up
@@ -265,9 +310,11 @@ func (r *genRun) finish(ctx context.Context, err error, f *failure) error {
 func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate func(string) validation.Result,
 	deltas func(ctx context.Context, attempt int) *deltaWriter) (*failure, error) {
 	stage := conv.Stage
+	met := r.g.metrics()
 	var last []validation.Issue
 	for attempt := 1; attempt <= MaxValidationAttempts; attempt++ {
 		var resp llm.Response
+		var took time.Duration // the call's latency, as the metrics see it
 		for try := 0; ; try++ {
 			if ok, err := r.current(ctx); err != nil || !ok {
 				return nil, orStop(err)
@@ -281,6 +328,7 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 			start := time.Now()
 			var err error
 			resp, err = r.g.LLM.Call(ctx, conv, onText)
+			took = time.Since(start)
 			if dw != nil {
 				if ferr := dw.flush(); ferr != nil {
 					return nil, ferr
@@ -293,6 +341,7 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 			if !errors.As(err, &ce) {
 				return nil, err // the job's context ended
 			}
+			met.LLMRequest(string(stage), "transport_error", took)
 			if werr := r.record(ctx, store.LLMCall{Stage: string(stage), Attempt: attempt, Outcome: "transport_error",
 				ErrorClass: string(ce.Class), Model: r.g.LLM.Model(), LatencyMS: int(time.Since(start).Milliseconds())}); werr != nil {
 				return nil, werr
@@ -325,10 +374,12 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 		if row.Model == "" {
 			row.Model = r.g.LLM.Model()
 		}
+		met.LLMTokens(string(stage), resp.InputTokens, resp.OutputTokens)
 		var issues []validation.Issue
 		switch resp.StopReason {
 		case "refusal":
 			row.Outcome = "refusal"
+			met.LLMRequest(string(stage), row.Outcome, took)
 			if err := r.record(ctx, row); err != nil {
 				return nil, err
 			}
@@ -341,11 +392,20 @@ func (r *genRun) stage(ctx context.Context, conv *llm.Conversation, validate fun
 			res := validate(resp.Text)
 			if res.OK() {
 				row.Outcome = "valid"
+				met.LLMRequest(string(stage), row.Outcome, took)
 				return nil, r.record(ctx, row)
 			}
 			row.Outcome = "invalid"
 			issues = res.Errors
+			seen := map[string]bool{}
+			for _, is := range issues {
+				if !seen[is.Code] {
+					seen[is.Code] = true
+					met.LLMValidationFailure(string(stage), is.Code)
+				}
+			}
 		}
+		met.LLMRequest(string(stage), row.Outcome, took)
 		row.ValidationErrors = issues
 		if err := r.record(ctx, row); err != nil {
 			return nil, err

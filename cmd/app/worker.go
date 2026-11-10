@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +18,7 @@ import (
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/delivery"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/llm"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/metrics"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockllm"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
 )
@@ -24,7 +26,8 @@ import (
 // workerCmd runs the River client with every queue. It is the only process
 // that calls Claude and the provider (PROVIDER_URL). It fails closed before
 // touching the database: an unknown LLM_MODE, LLM_MODE=anthropic without a
-// key, or no provider URL stops it.
+// key, or no provider URL stops it. It serves /metrics, /healthz and
+// /readyz on WORKER_METRICS_ADDR (default :9090).
 func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string) error {
 	llmCfg, err := llm.ConfigFromEnv(getenv)
 	if err != nil {
@@ -52,6 +55,8 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		return err
 	}
 	defer pool.Close()
+	reg := metrics.New()
+	reg.WorkerStarted()
 
 	gen := &campaign.Generator{
 		Pool:          pool,
@@ -62,6 +67,7 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		Sleep:         sleep,
 		DeltaInterval: campaign.DefaultDeltaInterval,
 		Log:           log,
+		Metrics:       reg,
 	}
 	fanout := &delivery.FanoutWorker{DB: pool, Now: time.Now}
 	send := &delivery.SendWorker{
@@ -73,6 +79,7 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		Backoff:         delivery.RandomBackoff(rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))),
 		Client:          &http.Client{},
 		Log:             log,
+		Metrics:         reg,
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, campaign.NewGenerateWorker(gen))
@@ -83,15 +90,74 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 		return err
 	}
 	fanout.Jobs = rc
-	if err := rc.Start(ctx); err != nil {
+
+	addr := getenv("WORKER_METRICS_ADDR")
+	if addr == "" {
+		addr = ":9090"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
 		return err
 	}
+	var ready atomic.Bool
+	hs := &http.Server{Handler: workerMux(reg, pool, &ready), ReadHeaderTimeout: 5 * time.Second}
+	// The listener outlives ctx: it answers /readyz with 503 while River
+	// stops, and closes after.
+	srvCtx, srvStop := context.WithCancel(context.WithoutCancel(ctx))
+	defer srvStop()
+	served := make(chan error, 1)
+	go func() { served <- serveOn(srvCtx, log, hs, ln, "worker metrics listening") }()
+
+	if err := rc.Start(ctx); err != nil {
+		srvStop()
+		<-served
+		return err
+	}
+	ready.Store(true)
 	// Never log the key; only whether it is there.
 	log.Info("worker started", "llm_mode", getenv("LLM_MODE"), "model", client.Model(), "anthropic_key", keyState(getenv("LLM_MODE")))
-	<-ctx.Done()
+	var serveErr error
+	select {
+	case <-ctx.Done():
+	case serveErr = <-served:
+		log.Error("worker metrics listener failed; stopping", "error", serveErr)
+	}
+	ready.Store(false)
 	stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return rc.Stop(stop)
+	err = rc.Stop(stop)
+	if serveErr != nil {
+		return errors.Join(serveErr, err)
+	}
+	srvStop()
+	return errors.Join(err, <-served)
+}
+
+// workerMux serves the worker's metrics and health. /healthz is liveness
+// only. /readyz is 200 while River runs and the database answers a ping.
+// Neither claims that jobs are being consumed: that is what
+// queue_oldest_job_age_seconds and worker_last_processed_timestamp_seconds
+// show.
+func workerMux(reg *metrics.Registry, pool *pgxpool.Pool, ready *atomic.Bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", reg.Handler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "river is not running", http.StatusServiceUnavailable)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
 }
 
 func keyState(mode string) string {

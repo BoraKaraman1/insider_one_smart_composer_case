@@ -1,5 +1,3 @@
-//go:build spec
-
 // Package metricstest scrapes a /metrics handler and reads the Prometheus
 // text format, so tests check what a scraper sees without importing the
 // client library. It is built only with the spec tag until stream 3 lands.

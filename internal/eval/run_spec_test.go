@@ -1,5 +1,3 @@
-//go:build spec
-
 package eval
 
 import (

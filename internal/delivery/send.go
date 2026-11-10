@@ -43,6 +43,35 @@ type SendWorker struct {
 	Backoff func(retry int) time.Duration
 	Client  *http.Client
 	Log     *slog.Logger
+	// Metrics counts provider calls and message outcomes. Nil counts
+	// nothing.
+	Metrics Metrics
+}
+
+// Metrics is what the send worker reports. *metrics.Registry satisfies it.
+// Message and Retry are called only when the guarded update applied, so a
+// duplicate or late run never counts a message twice.
+type Metrics interface {
+	ProviderRequest(channel, class string, d time.Duration)
+	LimiterWait(channel string, d time.Duration)
+	Message(channel, outcome string)
+	Retry(channel, reason string)
+	JobProcessed(at time.Time)
+}
+
+type noMetrics struct{}
+
+func (noMetrics) ProviderRequest(string, string, time.Duration) {}
+func (noMetrics) LimiterWait(string, time.Duration)             {}
+func (noMetrics) Message(string, string)                        {}
+func (noMetrics) Retry(string, string)                          {}
+func (noMetrics) JobProcessed(time.Time)                        {}
+
+func (w *SendWorker) metrics() Metrics {
+	if w.Metrics != nil {
+		return w.Metrics
+	}
+	return noMetrics{}
 }
 
 // RandomBackoff is retry.Backoff over a shared, locked random source.
@@ -74,6 +103,8 @@ func (w *SendWorker) log() *slog.Logger {
 func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) error {
 	id := job.Args.MessageID
 	log := w.log().With("message_id", id)
+	met := w.metrics()
+	defer func() { met.JobProcessed(time.Now()) }()
 	m, err := store.LoadSend(ctx, w.DB, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return river.JobCancel(fmt.Errorf("send: message %s does not exist", id))
@@ -89,9 +120,11 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	if lim == nil {
 		return fmt.Errorf("send: no limiter for channel %q", m.Channel)
 	}
+	waitStart := time.Now()
 	if err := lim.Wait(ctx); err != nil {
 		return err
 	}
+	met.LimiterWait(m.Channel, time.Since(waitStart))
 	// The claim is the dispatch cutoff. It checks consent and cancellation
 	// again, because either may have changed while we waited for the token.
 	now := w.Now()
@@ -112,31 +145,49 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	payload, err := w.payload(m)
 	if err != nil {
 		// A template the validator let through but the renderer rejects.
-		if _, uerr := store.MarkFinal(ctx, w.DB, id, "failed", string(retry.ClientError), "render: "+err.Error()); uerr != nil {
+		ok, uerr := store.MarkFinal(ctx, w.DB, id, "failed", string(retry.ClientError), "render: "+err.Error())
+		if uerr != nil {
 			return uerr
+		}
+		if ok {
+			met.Message(m.Channel, "failed")
 		}
 		return w.finish(ctx, log, m, river.JobCancel(err))
 	}
+	callStart := time.Now()
 	providerID, res, lastErr := w.post(ctx, id, payload)
+	met.ProviderRequest(m.Channel, string(res.Class), time.Since(callStart))
 	now = w.Now()
 	switch {
 	case res.Class == retry.Success:
-		if _, err := store.MarkSent(ctx, w.DB, id, providerID, now); err != nil {
+		ok, err := store.MarkSent(ctx, w.DB, id, providerID, now)
+		if err != nil {
 			return err
+		}
+		if ok {
+			met.Message(m.Channel, "sent")
 		}
 		log.Info("message sent", "channel", m.Channel, "attempts", attempts)
 		return w.finish(ctx, log, m, nil)
 
 	case !res.Class.Retryable():
-		if _, err := store.MarkFinal(ctx, w.DB, id, "failed", string(res.Class), lastErr); err != nil {
+		ok, err := store.MarkFinal(ctx, w.DB, id, "failed", string(res.Class), lastErr)
+		if err != nil {
 			return err
+		}
+		if ok {
+			met.Message(m.Channel, "failed")
 		}
 		log.Warn("message failed", "channel", m.Channel, "class", res.Class, "attempts", attempts)
 		return w.finish(ctx, log, m, river.JobCancel(fmt.Errorf("send: %s", lastErr)))
 
 	case attempts >= MaxAttempts || now.Sub(first) >= MaxAge:
-		if _, err := store.MarkFinal(ctx, w.DB, id, "dead", string(res.Class), lastErr); err != nil {
+		ok, err := store.MarkFinal(ctx, w.DB, id, "dead", string(res.Class), lastErr)
+		if err != nil {
 			return err
+		}
+		if ok {
+			met.Message(m.Channel, "dead")
 		}
 		log.Warn("message dead", "channel", m.Channel, "class", res.Class, "attempts", attempts)
 		return w.finish(ctx, log, m, nil)
@@ -146,8 +197,12 @@ func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) er
 	if delay == 0 {
 		delay = w.Backoff(attempts - 1)
 	}
-	if _, err := store.MarkRetry(ctx, w.DB, id, string(res.Class), lastErr, now.Add(delay)); err != nil {
+	ok, err = store.MarkRetry(ctx, w.DB, id, string(res.Class), lastErr, now.Add(delay))
+	if err != nil {
 		return err
+	}
+	if ok {
+		met.Retry(m.Channel, string(res.Class))
 	}
 	log.Info("message retry", "channel", m.Channel, "class", res.Class, "attempts", attempts, "delay_ms", delay.Milliseconds())
 	return river.JobSnooze(delay)
@@ -170,8 +225,12 @@ func (w *SendWorker) gate(ctx context.Context, log *slog.Logger, m store.Send) (
 }
 
 func (w *SendWorker) skip(ctx context.Context, log *slog.Logger, m store.Send, class string) error {
-	if _, err := store.SkipMessage(ctx, w.DB, m.ID, class); err != nil {
+	ok, err := store.SkipMessage(ctx, w.DB, m.ID, class)
+	if err != nil {
 		return err
+	}
+	if ok {
+		w.metrics().Message(m.Channel, "skipped")
 	}
 	log.Info("message skipped", "channel", m.Channel, "reason", class)
 	return w.finish(ctx, log, m, nil)

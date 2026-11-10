@@ -1,5 +1,3 @@
-//go:build spec
-
 package campaign
 
 import (
