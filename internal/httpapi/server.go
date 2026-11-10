@@ -58,6 +58,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	}
 	api := http.NewServeMux()
 	api.HandleFunc("POST /api/audience/count", s.count)
+	s.campaignRoutes(api)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
