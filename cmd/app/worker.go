@@ -57,6 +57,7 @@ func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string
 	defer pool.Close()
 	reg := metrics.New()
 	reg.WorkerStarted()
+	reg.WatchDatabase(pool)
 
 	gen := &campaign.Generator{
 		Pool:          pool,

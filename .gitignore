@@ -15,6 +15,11 @@ coverage.out
 web/node_modules/
 web/dist/
 
+# Eval reports. Mock and anthropic results stay in separate files, and
+# neither is committed.
+evals/report-*.md
+evals/report-*.json
+
 # OS / editors
 .DS_Store
 .idea/

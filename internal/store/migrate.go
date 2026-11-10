@@ -78,6 +78,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", riverLock); err != nil {
 			return err
 		}
+		//lint:ignore SA1019 the advisory lock in this transaction has to cover the migration
 		_, err := rm.MigrateTx(ctx, tx, rivermigrate.DirectionUp, nil)
 		return err
 	})

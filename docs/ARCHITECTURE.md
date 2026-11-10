@@ -1,12 +1,12 @@
 # Smart Campaign Composer: architecture plan
 
-Status: reviewed 2026-11-09; updated 2026-11-10 for stages A (Claude integration) and B (delivery) as built. The open questions are answered (section 16), and the reasoning goes in DECISIONS.md.
+Status: reviewed 2026-11-09; updated 2026-11-10 for stages A (Claude integration) and B (delivery) as built, and again for the frontend, the eval harness, metrics, health and CI. The open questions are answered (section 16), and the reasoning goes in DECISIONS.md.
 
 ## 1. Goal and scope
 
 A marketer writes a campaign brief in natural language. Claude proposes a target segment and SMS + email copy. The marketer reviews, edits and approves. Messages go through a Postgres-backed queue to a mock provider, and a dashboard shows delivery status live. No real recipients are ever contacted.
 
-Core flow first. Scheduled sends, A/B variants and CI are stretch items. Delivery receipts (async callbacks) are out of scope: status comes from the provider's synchronous response, and the README lists receipts under "not done". Stretch items that are not finished get listed there too.
+Core flow first. Scheduled sends and A/B variants are stretch items. CI is `.github/workflows/ci.yml`. Delivery receipts (async callbacks) are out of scope: status comes from the provider's synchronous response, and the README lists receipts under "not done". Stretch items that are not finished get listed there too.
 
 ## 2. Rules and how each one is enforced
 
@@ -27,21 +27,24 @@ Core flow first. Scheduled sends, A/B variants and CI are stretch items. Deliver
 
 ```mermaid
 flowchart LR
-  UI["Vue 3 SPA (Vite, TS)"] -->|REST + SSE| API["api (Go)"]
+  UI["Vue 3 SPA (Vite, TS)"] --> WEB["web (nginx)"]
+  WEB -->|"same origin, REST + SSE"| API["api (Go)"]
   API -->|enqueue, LISTEN| PG[("Postgres: app tables + River jobs")]
   W["worker (Go, River)"] --> PG
   W -->|Messages API| Claude["Claude API, or mockllm in mock mode"]
   W -->|HTTP + Idempotency-Key| MP["mockprovider (Go)"]
   MP --> MPDB[("Postgres: mockprovider db")]
-  OPS["/healthz /readyz"] -.- API
+  OPS["/metrics /healthz /readyz"] -.- API
+  OPS -.- W
 ```
 
-- **api**: HTTP handlers, validation, state machine, SSE streams. It holds an insert-only River client: generate, approve and cancel touch their jobs in the same transaction as their transition. It never calls Claude and never needs the key.
-- **worker**: River client. Runs the generate job (both LLM stages), the fan-out job and the per-channel send jobs, with the rate limiter and the retry policy. It is the only service that calls Claude and the provider, so it is the only container that may receive `ANTHROPIC_API_KEY`.
+- **web**: nginx serves the built Vue app and proxies `/api/`, `/healthz` and `/readyz` to the api on the same origin. The browser needs no CORS. Compose publishes it on `127.0.0.1:8081`.
+- **api**: HTTP handlers, validation, state machine, SSE streams, and `GET /metrics` for request counters. It holds an insert-only River client: generate, approve and cancel touch their jobs in the same transaction as their transition. It never calls Claude and never needs the key.
+- **worker**: River client. Runs the generate job (both LLM stages), the fan-out job and the per-channel send jobs, with the rate limiter and the retry policy. It is the only service that calls Claude and the provider, so it is the only container that may receive `ANTHROPIC_API_KEY`. It serves `/metrics`, `/healthz` and `/readyz` on `WORKER_METRICS_ADDR` (default `:9090`), including the database gauges.
 - **mockllm**: an HTTP fake of the Messages API (section 5). The worker uses it through the real SDK when `LLM_MODE=mock`, the compose default.
 - **mockprovider**: one message endpoint with fault injection and idempotency storage (section 8).
 - **Postgres**: one server. App tables and River tables in the `app` database, provider state in a separate `mockprovider` database with its own role, which cannot connect to `app` (`deploy/postgres-init`). So the mock cannot cheat by reading app tables.
-- `api`, `worker`, `mockllm`, `mockprovider`, `migrate` and `seed` are subcommands of one binary (`cmd/app`). `docker compose up` runs migrations, seeds about 5,000 users and starts everything.
+- `api`, `worker`, `mockllm`, `mockprovider`, `migrate`, `seed`, `eval` and `healthcheck` are subcommands of one binary (`cmd/app`). `docker compose up` runs migrations, seeds about 5,000 users and starts the api, the worker, both mocks and the web container. Long-running app containers are probed with `app healthcheck`. The web container uses `wget`. The app image is distroless and has no shell.
 
 ## 4. Campaign flow and state machine (rule 7)
 
@@ -103,7 +106,7 @@ Two calls per generation, matching the user flow in the spec:
 | `done` | revision id |
 | `failed` | reason (`invalid_output`, `refusal`, `transport_error`, `cancelled`), stage, errors |
 
-The worker runs a small partial-JSON extractor over the content stream and writes `delta` events, merged per field every 150 ms. `GET /api/campaigns/{id}/events` is SSE: the backlog after `Last-Event-ID` (or `?after=`, for curl), then live events, a heartbeat comment every 15 s, and the end after `done` or `failed`. The event id is the row id. One LISTEN connection per api process feeds an in-memory hub, so streams do not hold a database connection each, and a 1 s poll covers a missed notification. The handler clears its write deadline, so the server's `WriteTimeout` does not cut the stream. The token travels only in the `Authorization` header, so the browser reads the stream with `fetch`: `EventSource` cannot send that header. The UI shows deltas as provisional until `done`, and clears them on `attempt_failed`.
+The worker runs a small partial-JSON extractor over the content stream and writes `delta` events, merged per field every 150 ms. `GET /api/campaigns/{id}/events` is SSE: the backlog after `Last-Event-ID` (or `?after=`, for curl), then live events, a heartbeat comment every 15 s, and the end after `done` or `failed`. The event id is the row id. One LISTEN connection per api process feeds an in-memory hub, so streams do not hold a database connection each, and a 1 s poll covers a missed notification. The handler clears its write deadline, so the server's `WriteTimeout` does not cut the stream. The token travels only in the `Authorization` header, so the browser reads the stream with `fetch`: `EventSource` cannot send that header. The UI shows deltas as provisional until `done`, and clears them on `attempt_failed`. `GET /api/campaigns/{id}` includes `generation.events_url` for the latest generation (null before the first one), so a refresh reopens that stream. The UI uses the URL from the 202 or from the view and never builds one itself.
 
 **Cancel during generation**: `POST /cancel` moves the campaign to `cancelled`, writes `failed` with reason `cancelled`, and cancels the generate job with River's `JobCancelTx`, all in one transaction. A running job has its context cancelled; the job then stops without writing anything more.
 
@@ -245,18 +248,42 @@ A second residual case remains even with this provider: a call that sent and the
 
 ## 9. Live status and monitoring
 
-- **Delivery stats**: `GET /api/campaigns/{id}/stats` counts messages per channel and state (`queued`, `retrying` = queued with attempts above 0, `sending`, `sent`, `failed`, `dead`, `skipped`), every state present for both channels. A live delivery stream for the dashboard is not built yet; when it is, it reads with `fetch` like the generation stream, since `EventSource` cannot send the token.
-- **Metrics** (planned, not built yet: `/metrics`, `prometheus/client_golang`), with low-cardinality labels and no campaign or user ids:
-  - `messages_total{channel,outcome}`
-  - `provider_requests_total{channel,class}`
-  - `provider_request_duration_seconds{channel}`
-  - `retries_total{channel,reason}`
-  - `queue_jobs{queue,state}`
-  - `rate_limiter_wait_seconds{channel}`
-  - `llm_requests_total{stage,outcome}`
-  - `llm_validation_failures_total{stage,rule}`
-  - `worker_last_processed_timestamp_seconds`
-- **Health**: `/healthz` is liveness only (the process is up, no dependency checks, per Kubernetes guidance). `/readyz` checks the DB ping, applied migrations and the River client.
+- **Delivery stats**: `GET /api/campaigns/{id}/stats` counts messages per channel and state (`queued`, `retrying` = queued with attempts above 0, `sending`, `sent`, `failed`, `dead`, `skipped`), every state present for both channels. The dashboard polls the campaign view, these stats and the attention list. The next tick is scheduled one second after the previous tick finishes. There is no delivery event stream.
+- **Metrics** are `GET /metrics`, with no auth, on the api and on the worker (`WORKER_METRICS_ADDR`, default `:9090`). The registry is `internal/metrics` over `prometheus/client_golang`. Labels are closed sets. No campaign, message or user id is a label.
+
+  Two kinds of series:
+
+  - Counters and histograms are observed process activity. They reset when that process restarts. They cover every campaign. They are not written in the same transaction as the database, so they are not expected to equal dashboard totals.
+  - Gauges are read from the database at scrape time and show the persisted state. The worker registers that collector. Each scrape uses a 2 second timeout.
+
+  | Series | Kind | Source |
+  |---|---|---|
+  | `messages_total{channel,outcome}` | counter | incremented only when the guarded update applied |
+  | `provider_requests_total{channel,class}` | counter | every provider call |
+  | `provider_request_duration_seconds{channel}` | histogram | every provider call |
+  | `retries_total{channel,reason}` | counter | only when `MarkRetry` applied |
+  | `rate_limiter_wait_seconds{channel}` | histogram | time spent in `lim.Wait` |
+  | `llm_requests_total{stage,outcome}` | counter | one LLM call |
+  | `llm_request_duration_seconds{stage}` | histogram | one LLM call |
+  | `generation_duration_seconds{outcome}` | histogram | wall clock of one `Generator.Run`, retries and backoff included |
+  | `llm_tokens_total{stage,direction}` | counter | tokens, not cost |
+  | `llm_validation_failures_total{stage,rule}` | counter | validation codes |
+  | `worker_last_processed_timestamp_seconds` | gauge | this worker process; 0 until a job finishes |
+  | `messages{channel,state}` | gauge | database, all campaigns |
+  | `queue_jobs{queue,state}` | gauge | `river_job` |
+  | `queue_oldest_job_age_seconds{queue}` | gauge | `river_job`; 0 when no job is available |
+  | `http_requests_total{route,status}` | counter | api; the route is the mux pattern |
+  | `sse_streams` | gauge | api; open generation streams |
+
+  A duplicate or late send does not move `messages_total` or `retries_total` when the guarded update changes no row.
+
+- **Health** is three separate things.
+  - API `/healthz` is liveness only. API `/readyz` pings the database and, through `store.Pending`, checks that both goose and River migrations are applied.
+  - Worker `/healthz` is liveness only. Worker `/readyz` is 200 when the River client has started and is not stopping, and the database answers a ping. Job consumption is the operational series below, not this probe.
+  - Operational progress is `queue_oldest_job_age_seconds`, `queue_jobs`, `worker_last_processed_timestamp_seconds` and the dashboard reason `not_started`. The README says which of these to alert on.
+
+  Compose probes each long-running app container with `app healthcheck <url>`: one GET, a 2 second timeout, exit 0 on 200 and 1 otherwise. The image is distroless, so the probe is the binary. The web container uses busybox `wget`.
+
 - **Logs**: `slog` JSON with request id and message id. No phone numbers or email addresses in logs, and never the key: startup logs only `anthropic_key=present`.
 
 ## 10. Data model
@@ -288,13 +315,13 @@ A second residual case remains even with this provider: a call that sent and the
 | POST | `/api/campaigns` | create from brief |
 | POST | `/api/campaigns/{id}/generate` | `{version}` → 202 `{version, events_url}`; moves to generating and enqueues the job |
 | GET | `/api/campaigns/{id}/events` | SSE generation events (section 5); `Last-Event-ID` or `?after=` |
-| GET | `/api/campaigns/{id}` | campaign, latest revision, audit trail |
+| GET | `/api/campaigns/{id}` | campaign, latest revision, audit trail, `generation.events_url` (null before the first generation) |
 | POST | `/api/campaigns/{id}/revisions` | human edit with `base_revision_id`; 422 with field errors when invalid |
 | POST | `/api/campaigns/{id}/approve` | `{revision_id, version}`; 409 when stale, or `no_recipients` when no recipient has consent on any channel; enqueues the fan-out job |
 | POST | `/api/campaigns/{id}/reject`, `/cancel` | `{version}`; cancel also skips queued messages and cancels the generate job |
 | GET | `/api/campaigns/{id}/stats` | message counts per channel and state |
 | GET | `/api/campaigns/{id}/messages?filter=attention` | stuck and failed messages |
-| GET | `/healthz`, `/readyz` | ops (`/metrics` is planned) |
+| GET | `/healthz`, `/readyz`, `/metrics` | ops, no auth. What each one means is section 9. The worker serves the same three paths on `:9090` |
 
 ## 12. Secrets (rule 1)
 
@@ -310,7 +337,7 @@ A second residual case remains even with this provider: a call that sent and the
 ## 13. Repo layout
 
 ```
-cmd/app/        one binary, subcommands: api, worker, mockllm, mockprovider, migrate, seed
+cmd/app/        one binary, subcommands: api, worker, mockllm, mockprovider, migrate, seed, eval, healthcheck
 internal/
   jobs/         River job args, queues, worker settings (the contract between inserter and worker)
   retry/        Classify and Backoff, shared by the LLM client and the provider client
@@ -327,10 +354,13 @@ internal/
   seed/         deterministic seed generator and loader
   testdb/       per-package test database cloned from a template
   mockprovider/ provider server, fault injection, idempotency store
+  metrics/      Prometheus registry: process series and the database collector
+  eval/         golden-brief harness (clones a seeded template, scores Generator.Run)
 schemas/        *.schema.json
 migrations/     SQL migrations (embedded)
 deploy/         postgres-init (the mockprovider role and database)
-web/            Vue 3 + Vite + TypeScript, Vitest
+web/            Vue 3 + Vite + TypeScript + Vitest, served by nginx
+evals/          briefs.json. Reports are generated and are not committed
 docs/           ARCHITECTURE.md, segment-rules.md, seed-data.md
 .claude/        settings.json, hooks/
 .githooks/      pre-commit
@@ -343,7 +373,7 @@ docker-compose.yml, Makefile, CLAUDE.md, AGENTS.md, README.md, DECISIONS.md, ai-
 - `riverqueue/river` + `riverpgxv5` + `rivermigrate` (MPL-2.0)
 - `jackc/pgx/v5`
 - `santhosh-tekuri/jsonschema/v6` (Apache-2.0)
-- `prometheus/client_golang`
+- `prometheus/client_golang` (Apache-2.0; the metrics registry)
 - `golang.org/x/time/rate`
 
 The router is stdlib `net/http`, and there is no ORM. Builds and tests use Go 1.26.10, the latest 1.26 patch. The `toolchain` line in `go.mod` and the Dockerfile's base image pin it, and `cmd/app/toolchain_test.go` keeps them equal and fails on an older compiler.
@@ -353,7 +383,8 @@ The router is stdlib `net/http`, and there is no ORM. Builds and tests use Go 1.
 - **Unit**: Classify table, backoff (seeded), limiter (synctest), DSL compiler (golden SQL + args, fuzz), template validator, SMS length and encoding, state transitions (full matrix), schema derivation, partial-JSON extractor.
 - **LLM**: the real client and SDK against `internal/mockllm` through `option.WithBaseURL`, covering valid, invalid-then-valid, always-invalid, refusal, `max_tokens`, 429 / 529 / stall, and a hostile-output set; SSE end to end with a River worker inside the test.
 - **Integration** (Postgres in compose): approve → fan-out → send with the fault-injecting provider at 10% 5xx, 5% 429, 3% "send then drop" and 2% hang. The test asserts every message reaches a terminal state, permanent 4xx errors are not retried, the provider's max sends per key is 1, and at most about 100 requests per channel arrive in any second.
-- **Frontend**: Vitest for the stream reducer and the validation-error display.
+- **Frontend**: Vitest for the stream reducer, the SSE parser, issue paths, the draft and delivery polling. `make e2e` runs the nginx scenarios against the compose stack.
+- **Eval**: `make eval` runs the golden briefs through `campaign.Generator.Run` in mock mode and writes `evals/report-mock.md`. `LLM_MODE=anthropic make eval` is for a human terminal. The two reports are separate files. Mock numbers prove the harness.
 - **Test database**: `make test` starts a throwaway `postgres-test` service and builds `app_template` once, migrated and seeded at a fixed `asOf`. Each integration package clones its own database from it (`CREATE DATABASE ... TEMPLATE`), so packages run in parallel without colliding.
 - **Time**: tests always pass a fixed `asOf`. Compose seeds relative to load time, so the documented example counts hold whenever the stack is seeded.
 - `make test` runs it all with no key and no network.
@@ -370,7 +401,7 @@ The due date is around 2026-11-12 (not confirmed), so about three working days r
 6. Dashboard: live stats, "Needs attention", metrics, health.
 7. README, DECISIONS.md, e2e run, session export scrub.
 
-Stretch: scheduling, A/B, CI. Not done by design: delivery receipts.
+Stretch: scheduling, A/B. Not done by design: delivery receipts. CI, the dashboard, metrics and health are in the tree. The root README is the short stub. The full README remains step 7.
 
 ## 16. Resolved questions (2026-11-09)
 

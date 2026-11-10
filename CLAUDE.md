@@ -47,6 +47,9 @@ Read before changing anything in an area:
 | `make lint` | gofmt + go vet |
 | `make hooks` | install the git pre-commit hook (`core.hooksPath .githooks`) |
 | `make seed` / `make reseed` | load seed data / reload it anchored at now |
+| `make web-test` | frontend typecheck and unit tests (Node 22) |
+| `make e2e` | nginx scenarios against the compose stack on :8081 (start it with `make up` first) |
+| `make eval` | golden briefs, mock unless `LLM_MODE` is set. `LLM_MODE=anthropic make eval` is for a human terminal only |
 
 These targets are being added on day 1. If one is missing, it has not been built yet. Say so instead of inventing a replacement.
 

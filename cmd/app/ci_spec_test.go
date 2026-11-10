@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// Stage 0 of the third plan: a minimal CI workflow that runs what make lint
-// and make test run. These checks read the files as text, so they need no
-// YAML library. They fail until .github/workflows/ci.yml exists.
+// The CI workflow, read as text so the check needs no YAML library.
+// Stage 0 required the lint, vet, migrate, seed and test steps. Stream 4
+// splits that work across lint-test and integration and adds the rest.
 
 func readRepoFile(t *testing.T, path string) string {
 	t.Helper()
@@ -27,7 +27,8 @@ func TestCIWorkflowGoJob(t *testing.T) {
 	ci := readRepoFile(t, ".github/workflows/ci.yml")
 
 	for _, want := range []struct{ what, re string }{
-		{"a go job", `(?m)^  go:\s*$`},
+		{"a lint-test job", `(?m)^  lint-test:\s*$`},
+		{"an integration job", `(?m)^  integration:\s*$`},
 		{"Go from go.mod, never a hard-coded version", `go-version-file:\s*['"]?go\.mod`},
 		{"a gofmt check", `gofmt -l`},
 		{"go vet", `go vet \./\.\.\.`},
@@ -36,6 +37,7 @@ func TestCIWorkflowGoJob(t *testing.T) {
 		{"the migrate step", `app migrate`},
 		{"go test over every package", `go test [^\n]*\./\.\.\.`},
 		{"the hook tests", `guard-secrets_test\.sh|make (-s )?test-hooks`},
+		{"race on a full test run", `go test -race [^\n]*\./\.\.\.`},
 	} {
 		if !regexp.MustCompile(want.re).MatchString(ci) {
 			t.Errorf("ci.yml has no %s (want a match for %q)", want.what, want.re)
@@ -43,6 +45,59 @@ func TestCIWorkflowGoJob(t *testing.T) {
 	}
 	if regexp.MustCompile(`go-version:\s`).MatchString(ci) {
 		t.Error("ci.yml pins go-version; use go-version-file: go.mod so TestToolchainPinned stays the one source")
+	}
+}
+
+// Stream 4: every job is bounded, third-party actions are pinned to a
+// commit, and the extra jobs exist.
+func TestCIStream4(t *testing.T) {
+	ci := readRepoFile(t, ".github/workflows/ci.yml")
+	jobs := []string{"lint-test", "integration", "fuzz", "web", "eval", "docker", "secrets"}
+	for _, job := range jobs {
+		block := regexp.MustCompile(`(?m)^  ` + job + `:\n(?:    .*\n)*`).FindString(ci)
+		if block == "" {
+			t.Errorf("no job %s", job)
+			continue
+		}
+		if !strings.Contains(block, "timeout-minutes:") {
+			t.Errorf("job %s has no timeout-minutes", job)
+		}
+	}
+	if !strings.Contains(ci, "permissions:") || !strings.Contains(ci, "contents: read") {
+		t.Error("ci.yml does not set permissions contents: read")
+	}
+	uses := regexp.MustCompile(`(?m)^\s*(?:- )?uses:\s*(\S+)`)
+	found := uses.FindAllStringSubmatch(ci, -1)
+	if len(found) == 0 {
+		t.Fatal("ci.yml has no actions")
+	}
+	sha := regexp.MustCompile(`@[0-9a-f]{40}$`)
+	for _, m := range found {
+		if !sha.MatchString(m[1]) {
+			t.Errorf("action is not pinned to a commit SHA: %s", m[1])
+		}
+	}
+	for _, want := range []string{
+		"staticcheck@v0.8.2",
+		"govulncheck@v1.9.0",
+		"-count=3",
+		"-timeout 5m",
+		"FuzzExtractFieldsNeverPanics",
+		"FuzzExtractFieldsPrefix",
+		"FuzzCompileShape",
+		"FuzzParse",
+		"fuzztime=30s",
+		"fetch-depth: 0",
+		"gitleaks/gitleaks-action@",
+		"push: false",
+		"load: true",
+		"make e2e",
+		"upload-artifact@",
+		"evals/report-mock.md",
+	} {
+		if !strings.Contains(ci, want) {
+			t.Errorf("ci.yml is missing %q", want)
+		}
 	}
 }
 

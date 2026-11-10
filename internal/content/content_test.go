@@ -193,7 +193,7 @@ func TestValidate(t *testing.T) {
 		{"port after the link", "{{campaign_url}}:8080", "s", "b", []string{"/sms/body url_not_allowed"}},
 		{"dot then text after the link", "{{campaign_url}}.Hemen gel", "s", "b", []string{"/sms/body url_not_allowed"}},
 		{"variable after the link", "{{campaign_url}}{{city}}", "s", "b", []string{"/sms/body url_not_allowed"}},
-		{"zero-width space after the link", "{{campaign_url}}​.evil.com", "s", "b", []string{"/sms/body url_not_allowed"}},
+		{"zero-width space after the link", "{{campaign_url}}\u200b.evil.com", "s", "b", []string{"/sms/body url_not_allowed"}},
 		{"text before the link", "evil@{{campaign_url}}", "s", "b", []string{"/sms/body url_not_allowed"}},
 		{"email address", "Yaz: info@insider.com", "s", "b", []string{"/sms/body email_not_allowed"}},
 		{"HTML in email body", "x", "s", "<b>Son gün!</b>", []string{"/email/body html_not_allowed"}},

@@ -11,8 +11,12 @@
 //	                               MOCKLLM_INVALID_FIRST); needs no database
 //	app mockprovider               serve the fake SMS and email provider on its own
 //	                               database (MOCKPROVIDER_DATABASE_URL, MOCKPROVIDER_*)
+//	app eval [-cases path] [-out path] [-runs N] [-template name]
+//	                               score the golden briefs (EVAL_ADMIN_URL, LLM_MODE)
+//	app healthcheck <url>          one GET, exit 0 on 200; for compose healthchecks
 //
-// All others need DATABASE_URL.
+// api, worker, migrate, seed and eval need a database URL. healthcheck,
+// mockllm and mockprovider do not use the app database.
 package main
 
 import (
@@ -34,18 +38,23 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/httpapi"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/metrics"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/seed"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
 )
 
 func main() {
+	// Before the signal handler: a healthcheck is one request and an exit code.
+	if len(os.Args) >= 2 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheckCmd(os.Args[2:]))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <api|worker|migrate|seed|mockllm|mockprovider> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: app <api|worker|migrate|seed|mockllm|mockprovider|eval|healthcheck> [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -62,6 +71,8 @@ func main() {
 		err = migrate(ctx)
 	case "seed":
 		err = seedCmd(ctx, log, os.Args[2:])
+	case "eval":
+		err = evalCmd(ctx, log, os.Getenv, os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand %q", os.Args[1])
 	}
@@ -105,8 +116,11 @@ func apiCmd(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Request counters and the open-stream gauge. Database gauges are scraped
+	// from the worker, so there is one collector.
+	reg := metrics.New()
 	srv := &httpapi.Server{Config: cfg, Pool: pool, Schemas: schemas, Log: log, River: rc,
-		Hub: httpapi.NewHub(ctx, pool, log)}
+		Hub: httpapi.NewHub(ctx, pool, log), Metrics: reg}
 	h, err := srv.Handler()
 	if err != nil {
 		return err

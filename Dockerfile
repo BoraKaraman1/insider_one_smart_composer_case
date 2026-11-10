@@ -1,4 +1,4 @@
-# One image for every subcommand: app api | worker | migrate | seed | mockllm | mockprovider.
+# One image for every subcommand: app api | worker | migrate | seed | mockllm | mockprovider | eval | healthcheck.
 FROM golang:1.26.10-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./

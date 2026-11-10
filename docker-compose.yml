@@ -1,7 +1,8 @@
 name: smart-campaign-composer
 
 # docker compose up: Postgres, then migrate, then seed (anchored at now, a
-# no-op if data exists), then the api on http://127.0.0.1:8080, the worker,
+# no-op if data exists), then the api on http://127.0.0.1:8080, the worker
+# (metrics on http://127.0.0.1:9090), the web UI on http://127.0.0.1:8081,
 # the mock LLM and the mock provider (stats on http://127.0.0.1:8091).
 #
 # LLM_MODE defaults to mock, so the stack runs without a key. Only the
@@ -13,6 +14,7 @@ name: smart-campaign-composer
 
 x-app: &app
   build: .
+  image: smart-campaign-composer:local
   environment:
     DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
 
@@ -61,6 +63,12 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
 
   # Runs the generate, fan-out and send jobs. The only container that may
   # get the API key.
@@ -76,13 +84,22 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
       MOCKLLM_URL: http://mockllm:8090
       PROVIDER_URL: http://mockprovider:8091
+      WORKER_METRICS_ADDR: ":9090"
+    ports:
+      - "127.0.0.1:9090:9090"
     depends_on:
       seed:
         condition: service_completed_successfully
       mockllm:
-        condition: service_started
+        condition: service_healthy
       mockprovider:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck", "http://127.0.0.1:9090/readyz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
 
   # Fake Messages API for LLM_MODE=mock. No database, no key.
   mockllm:
@@ -92,6 +109,12 @@ services:
       MOCKLLM_ADDR: ":8090"
       # true: the first answer of each stage is invalid, to show the repair loop.
       MOCKLLM_INVALID_FIRST: ${MOCKLLM_INVALID_FIRST:-false}
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck", "http://127.0.0.1:8090/healthz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
 
   # Fake SMS and email provider with fault injection, on its own database
   # and role. Rates are shares of requests; see internal/mockprovider.
@@ -116,6 +139,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck", "http://127.0.0.1:8091/healthz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+  # The marketer UI. Same origin as the API: nginx proxies /api, /healthz
+  # and /readyz. Busybox wget, because this image is not the distroless app.
+  web:
+    build: ./web
+    image: smart-campaign-composer-web:local
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
 
   # Throwaway server for make test: in memory, removed after the run.
   postgres-test:
