@@ -68,8 +68,10 @@ func TestMigrateUpDownUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := p.GetDBVersion(ctx); err != nil || v != 2 {
-		t.Fatalf("version %d, %v; want 2", v, err)
+	sources := p.ListSources()
+	want := sources[len(sources)-1].Version // the highest embedded migration
+	if v, err := p.GetDBVersion(ctx); err != nil || v != want {
+		t.Fatalf("version %d, %v; want %d", v, err, want)
 	}
 
 	if _, err := p.DownTo(ctx, 0); err != nil {

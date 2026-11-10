@@ -1,0 +1,143 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"math/rand/v2"
+	"net/http"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/campaign"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/delivery"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/llm"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockllm"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
+)
+
+// workerCmd runs the River client with every queue. It is the only process
+// that calls Claude and the provider (PROVIDER_URL). It fails closed before
+// touching the database: an unknown LLM_MODE, LLM_MODE=anthropic without a
+// key, or no provider URL stops it.
+func workerCmd(ctx context.Context, log *slog.Logger, getenv func(string) string) error {
+	llmCfg, err := llm.ConfigFromEnv(getenv)
+	if err != nil {
+		return err
+	}
+	url := getenv("DATABASE_URL")
+	if url == "" {
+		return errors.New("DATABASE_URL is not set")
+	}
+	providerURL := getenv("PROVIDER_URL")
+	if providerURL == "" {
+		return errors.New("PROVIDER_URL is not set (the mock provider, for example http://mockprovider:8091)")
+	}
+	schemas, err := schema.Load()
+	if err != nil {
+		return err
+	}
+	llmCfg.Schemas = schemas
+	client, err := llm.New(llmCfg)
+	if err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	gen := &campaign.Generator{
+		Pool:          pool,
+		Schemas:       schemas,
+		LLM:           client,
+		Now:           time.Now,
+		Rand:          rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+		Sleep:         sleep,
+		DeltaInterval: campaign.DefaultDeltaInterval,
+		Log:           log,
+	}
+	fanout := &delivery.FanoutWorker{DB: pool, Now: time.Now}
+	send := &delivery.SendWorker{
+		DB:              pool,
+		ProviderURL:     providerURL,
+		Limiters:        delivery.NewLimiters(),
+		ProviderTimeout: delivery.ProviderTimeout,
+		Now:             time.Now,
+		Backoff:         delivery.RandomBackoff(rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))),
+		Client:          &http.Client{},
+		Log:             log,
+	}
+	workers := river.NewWorkers()
+	river.AddWorker(workers, campaign.NewGenerateWorker(gen))
+	river.AddWorker(workers, fanout)
+	river.AddWorker(workers, send)
+	rc, err := river.NewClient(riverpgxv5.New(pool), jobs.ClientConfig(workers, log))
+	if err != nil {
+		return err
+	}
+	fanout.Jobs = rc
+	if err := rc.Start(ctx); err != nil {
+		return err
+	}
+	// Never log the key; only whether it is there.
+	log.Info("worker started", "llm_mode", getenv("LLM_MODE"), "model", client.Model(), "anthropic_key", keyState(getenv("LLM_MODE")))
+	<-ctx.Done()
+	stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return rc.Stop(stop)
+}
+
+func keyState(mode string) string {
+	if mode == "anthropic" {
+		return "present" // ConfigFromEnv refused to start without one
+	}
+	return "not used"
+}
+
+// sleep waits for d or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// mockllmCmd serves the fake Messages API for LLM_MODE=mock. It needs no
+// database and no key.
+func mockllmCmd(ctx context.Context, log *slog.Logger, getenv func(string) string) error {
+	addr := getenv("MOCKLLM_ADDR")
+	if addr == "" {
+		addr = ":8090"
+	}
+	hs := &http.Server{Addr: addr, Handler: mockllmHandler(getenv), ReadHeaderTimeout: 5 * time.Second}
+	return serve(ctx, log, hs, "mockllm listening")
+}
+
+func mockllmHandler(getenv func(string) string) *mockllm.Server {
+	return mockllm.New(mockllm.Options{InvalidFirst: getenv("MOCKLLM_INVALID_FIRST") == "true"})
+}
+
+// serve runs hs until ctx ends, then shuts it down.
+func serve(ctx context.Context, log *slog.Logger, hs *http.Server, msg string) error {
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(shutdown)
+	}()
+	log.Info(msg, "addr", hs.Addr)
+	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}

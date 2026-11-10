@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/riverqueue/river"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
@@ -42,6 +44,13 @@ type Server struct {
 	Schemas *schema.Set
 	Log     *slog.Logger
 	Now     func() time.Time // defaults to time.Now; tests pin it
+	// River is an insert-only client: generate and approve enqueue jobs in
+	// the same transaction as their transition, and cancel cancels them.
+	River *river.Client[pgx.Tx]
+	// Hub wakes event streams on new events. Without one they only poll.
+	Hub          *Hub
+	Heartbeat    time.Duration // SSE heartbeat; DefaultHeartbeat if zero
+	PollInterval time.Duration // SSE poll; DefaultPollInterval if zero
 }
 
 // Handler builds the routes. It refuses to build an open API: with no token,
@@ -59,6 +68,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	api := http.NewServeMux()
 	api.HandleFunc("POST /api/audience/count", s.count)
 	s.campaignRoutes(api)
+	s.generateRoutes(api)
+	s.deliveryRoutes(api)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -102,6 +113,10 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController reach the connection (flush, write
+// deadline) through this wrapper.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // logRequests logs method, path, status and duration. Never bodies, query
 // strings or headers.

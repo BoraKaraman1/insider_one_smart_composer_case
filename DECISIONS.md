@@ -50,3 +50,15 @@ Her karar için:
 | 2026-11-09 | Gün 1 planı | Derleyici özelliği zayıftı, testler çakışırdı, seed zamanı kayardı, DSL eksikti | Benim incelemem |
 | 2026-11-09 | Adım 1 | Claude commit attı | Ben fark ettim, commit geri alındı |
 | 2026-11-09 | `docs/segment-rules.md` taslağı | Doğru bir durumu sınır gibi yazmıştı | Claude'un kendi kontrolü |
+
+## Hatırlatmalar (Claude, 2026-11-10, A ve B aşamaları)
+
+Kısa notlar. Ayrıntı sohbette. İstersen sil ya da kendi kararına çevir.
+
+- SDK v2.8.0'da `WithAPIKey` `Authorization: Bearer` gönderiyor. İstemci `x-api-key` başlığını elle koyuyor ve `WithoutEnvironmentDefaults` kullanıyor.
+- SDK `json.Number`'ı string yazıyor (`"minItems":"1"`). Şema SDK'ya düz sayılarla veriliyor.
+- `net/http`, `Idempotency-Key` taşıyan isteği kopan bağlantıda kendisi tekrar gönderiyor. Bu, limiter'ı ve deneme sayısını atlıyordu; `GetBody = nil` ile kapatıldı.
+- Cancel (api) generate işini River `JobCancelTx` ile aynı transaction'da iptal ediyor.
+- Mock provider'da gecikme anahtar kilidinin içinde. Böylece aynı anahtarlı eşzamanlı istek testi gerçekten çakışıyor.
+- Belirsiz çağrıdan (gönderildi, bağlantı koptu) sonra tüm denemeler biterse mesaj `dead` olur ama kişiye bir kez gitmiştir. Chaos testi bunu sınır olarak sayıyor.
+- Test düzeltmeleri (onaylı): TestWatchdog cleanup sırası, TestStartGeneration onay fixture'ı, migrate testi sürüm sayısı, render testi SMS fixture'ı, chaos testi sayım.

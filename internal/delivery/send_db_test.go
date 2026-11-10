@@ -1,0 +1,478 @@
+package delivery
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/content"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/mockprovider"
+)
+
+func TestSendWorkerTimeout(t *testing.T) {
+	if got := (&SendWorker{}).Timeout(sendJob("x")); got != jobs.SendTimeout {
+		t.Errorf("job timeout %v, want %v", got, jobs.SendTimeout)
+	}
+	if ProviderTimeout != 5*time.Second {
+		t.Errorf("provider timeout %v, want 5s", ProviderTimeout)
+	}
+	if MaxAttempts != 6 || MaxAge != 15*time.Minute {
+		t.Errorf("dead after %d attempts or %v; want 6 and 15m", MaxAttempts, MaxAge)
+	}
+}
+
+// The happy path: one token, one request with the message id as the
+// idempotency key, the rendered copy, and a sent row with the provider id.
+func TestSendDeliversRenderedMessage(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	user := consentingUsers(t, e.pool, 1)[0]
+	smsID := insertMessage(t, e.pool, c, user, "sms", "")
+	emailID := insertMessage(t, e.pool, c, user, "email", "")
+
+	for _, id := range []string{smsID, emailID} {
+		if err := e.work(id); err != nil {
+			t.Fatalf("work %s: %v", id, err)
+		}
+	}
+
+	var first, last, city, phone, email string
+	if err := e.pool.QueryRow(context.Background(), `SELECT first_name, last_name, city, phone, email FROM users WHERE id = $1`, user).
+		Scan(&first, &last, &city, &phone, &email); err != nil {
+		t.Fatal(err)
+	}
+	rc := content.RenderContext{FirstName: first, LastName: last, City: city, CampaignURL: campaignURL}
+	wantSMS, err := content.RenderText(smsBody, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSubject, err := content.RenderText(emailSubject, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sms := e.prov.callsFor(smsID)
+	if len(sms) != 1 {
+		t.Fatalf("sms: %d requests, want 1", len(sms))
+	}
+	if b := sms[0].Body; b["channel"] != "sms" || b["to"] != phone || b["body"] != wantSMS {
+		t.Errorf("sms payload %v; want channel sms, to %q, body %q", b, phone, wantSMS)
+	}
+	if _, has := sms[0].Body["subject"]; has {
+		t.Errorf("sms payload has a subject: %v", sms[0].Body)
+	}
+	mail := e.prov.callsFor(emailID)
+	if len(mail) != 1 {
+		t.Fatalf("email: %d requests, want 1", len(mail))
+	}
+	if b := mail[0].Body; b["channel"] != "email" || b["to"] != email || b["subject"] != wantSubject || b["body"] == "" || b["body"] == nil {
+		t.Errorf("email payload %v; want channel email, to %q, subject %q and a body", b, email, wantSubject)
+	}
+
+	for _, id := range []string{smsID, emailID} {
+		m := loadMessage(t, e.pool, id)
+		if m.State != "sent" || m.Attempts != 1 || str(m.ProviderID) == "" || m.SentAt == nil || m.FirstAttemptAt == nil {
+			t.Errorf("message %s: %+v; want sent after 1 attempt with a provider id", id, m)
+		}
+		if m.FirstAttemptAt != nil && !m.FirstAttemptAt.Equal(e.now) {
+			t.Errorf("first_attempt_at %v, want the worker's now %v", m.FirstAttemptAt, e.now)
+		}
+	}
+	if got := e.tokensTaken(); got != 2 {
+		t.Errorf("%d limiter tokens for 2 provider calls", got)
+	}
+	if e.tokens["sms"].n.Load() != 1 || e.tokens["email"].n.Load() != 1 {
+		t.Error("a message took its token from the other channel's limiter")
+	}
+	// No contact data or copy in the logs.
+	for _, secret := range []string{phone, email, wantSMS, wantSubject} {
+		if strings.Contains(e.logs.String(), secret) {
+			t.Errorf("logs contain %q", secret)
+		}
+	}
+}
+
+// Rule 6 and rule 8: a 5xx is retried, each attempt takes its own token,
+// and the provider sends once.
+func TestServerErrorThenOK(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.prov.force(id, "503", "ok")
+
+	err := e.work(id)
+	d, ok := snoozed(err)
+	if !ok || d != fixedBackoff {
+		t.Fatalf("after 503: %v; want JobSnooze(%v)", err, fixedBackoff)
+	}
+	m := loadMessage(t, e.pool, id)
+	if m.State != "queued" || m.Attempts != 1 || str(m.LastErrorClass) != "server_error" ||
+		m.NextAttemptAt == nil || !m.NextAttemptAt.Equal(e.now.Add(fixedBackoff)) {
+		t.Fatalf("after 503: %+v; want queued, 1 attempt, server_error, next attempt at now+%v", m, fixedBackoff)
+	}
+	if !slices.Equal(e.retries, []int{0}) {
+		t.Errorf("Backoff called with %v; want [0] (0 is the first retry)", e.retries)
+	}
+
+	if err := e.work(id); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	m = loadMessage(t, e.pool, id)
+	if m.State != "sent" || m.Attempts != 2 {
+		t.Errorf("after 503 then ok: %+v; want sent after 2 attempts", m)
+	}
+	s := e.prov.stats(t)
+	if s.UniqueSends != 1 || s.MaxSendsPerKey != 1 || len(e.prov.callsFor(id)) != 2 {
+		t.Errorf("provider stats %+v; want 2 requests and 1 send", s)
+	}
+	if e.tokensTaken() != 2 {
+		t.Errorf("%d tokens for 2 provider calls", e.tokensTaken())
+	}
+}
+
+// Retry-After wins over backoff, and the snooze is exactly that long.
+func TestRateLimitedHonorsRetryAfter(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{RetryAfter: 2 * time.Second})
+	c := insertSendingCampaign(t, e.pool)
+	users := consentingUsers(t, e.pool, 2)
+	with := insertMessage(t, e.pool, c, users[0], "sms", "")
+	without := insertMessage(t, e.pool, c, users[1], "sms", "")
+	e.prov.force(with, "429")
+	e.prov.force(without, "429-no-retry-after")
+
+	cases := []struct {
+		id   string
+		want time.Duration
+	}{
+		{with, 2 * time.Second},
+		{without, fixedBackoff},
+	}
+	for _, cs := range cases {
+		err := e.work(cs.id)
+		if d, ok := snoozed(err); !ok || d != cs.want {
+			t.Errorf("429: %v; want JobSnooze(%v)", err, cs.want)
+		}
+		m := loadMessage(t, e.pool, cs.id)
+		if m.State != "queued" || str(m.LastErrorClass) != "rate_limited" || m.NextAttemptAt == nil || !m.NextAttemptAt.Equal(e.now.Add(cs.want)) {
+			t.Errorf("429: %+v; want queued, rate_limited, next attempt at now+%v", m, cs.want)
+		}
+	}
+}
+
+// Rule 6: a 4xx other than 408 and 429 is never retried.
+func TestClientErrorFailsWithoutRetry(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.prov.force(id, "400")
+
+	err := e.work(id)
+	if !cancelled(err) {
+		t.Fatalf("after 400: %v; want river.JobCancel", err)
+	}
+	m := loadMessage(t, e.pool, id)
+	if m.State != "failed" || str(m.LastErrorClass) != "client_error" || m.Attempts != 1 {
+		t.Errorf("after 400: %+v; want failed, client_error, 1 attempt", m)
+	}
+	if n := len(e.prov.callsFor(id)); n != 1 {
+		t.Errorf("%d requests, want 1", n)
+	}
+	if len(e.retries) != 0 {
+		t.Errorf("Backoff was consulted for a permanent error: %v", e.retries)
+	}
+}
+
+// Always 503: the message is dead after MaxAttempts provider calls.
+func TestAlwaysFailingIsDeadAfterSixAttempts(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.prov.force(id, slices.Repeat([]string{"503"}, 10)...)
+
+	var err error
+	runs := 0
+	for runs < 10 {
+		runs++
+		if err = e.work(id); err == nil || cancelled(err) {
+			break
+		}
+		if _, ok := snoozed(err); !ok {
+			t.Fatalf("run %d: %v", runs, err)
+		}
+	}
+	m := loadMessage(t, e.pool, id)
+	if m.State != "dead" || m.Attempts != MaxAttempts || str(m.LastErrorClass) != "server_error" {
+		t.Errorf("after %d runs: %+v; want dead after %d attempts, server_error", runs, m, MaxAttempts)
+	}
+	if n := len(e.prov.callsFor(id)); n != MaxAttempts {
+		t.Errorf("%d requests, want %d", n, MaxAttempts)
+	}
+	if e.tokensTaken() != MaxAttempts {
+		t.Errorf("%d tokens for %d provider calls", e.tokensTaken(), MaxAttempts)
+	}
+	// A dead message's job does not come back.
+	if _, ok := snoozed(err); ok {
+		t.Errorf("the last run snoozed: %v", err)
+	}
+	if err := e.work(id); err != nil && !cancelled(err) {
+		t.Errorf("a run on a dead message: %v", err)
+	}
+	if n := len(e.prov.callsFor(id)); n != MaxAttempts {
+		t.Errorf("a dead message was sent again: %d requests", n)
+	}
+}
+
+// A message is also dead 15 minutes after its first attempt, whatever the
+// attempt count.
+func TestDeadAfterMaxAge(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	users := consentingUsers(t, e.pool, 2)
+	old := insertMessage(t, e.pool, c, users[0], "sms", "")
+	young := insertMessage(t, e.pool, c, users[1], "sms", "")
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `UPDATE messages SET attempts = 1, last_error_class = 'server_error', first_attempt_at = $2 WHERE id = $1`,
+		old, e.now.Add(-16*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE messages SET attempts = 1, last_error_class = 'server_error', first_attempt_at = $2 WHERE id = $1`,
+		young, e.now.Add(-14*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.prov.force(old, "503")
+	e.prov.force(young, "503")
+
+	if err := e.work(old); err != nil && !cancelled(err) {
+		t.Errorf("old message: %v; want no retry", err)
+	}
+	if m := loadMessage(t, e.pool, old); m.State != "dead" || m.Attempts != 2 {
+		t.Errorf("old message: %+v; want dead after its second attempt", m)
+	}
+	if _, ok := snoozed(e.work(young)); !ok {
+		t.Error("a message 14 minutes into its retries was not retried")
+	}
+	if m := loadMessage(t, e.pool, young); m.State != "queued" {
+		t.Errorf("young message: %+v; want queued", m)
+	}
+	// first_attempt_at is set once and never moved.
+	if m := loadMessage(t, e.pool, young); m.FirstAttemptAt == nil || !m.FirstAttemptAt.Equal(e.now.Add(-14*time.Minute)) {
+		t.Errorf("first_attempt_at moved: %+v", m)
+	}
+}
+
+// Consent is checked again at send time, per channel, before a token is
+// taken.
+func TestConsentRevokedBeforeSending(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	user := consentingUsers(t, e.pool, 1)[0]
+	sms := insertMessage(t, e.pool, c, user, "sms", "")
+	email := insertMessage(t, e.pool, c, user, "email", "")
+	if _, err := e.pool.Exec(context.Background(), `UPDATE users SET consent_sms = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.work(sms); err != nil {
+		t.Fatalf("sms: %v", err)
+	}
+	if m := loadMessage(t, e.pool, sms); m.State != "skipped" || str(m.LastErrorClass) != "no_consent" || m.Attempts != 0 {
+		t.Errorf("sms: %+v; want skipped, no_consent, 0 attempts", m)
+	}
+	if n := len(e.prov.callsFor(sms)); n != 0 || e.tokens["sms"].n.Load() != 0 {
+		t.Errorf("sms without consent: %d requests, %d tokens; want none", n, e.tokens["sms"].n.Load())
+	}
+	// Email consent is untouched, so that message still goes out.
+	if err := e.work(email); err != nil {
+		t.Fatalf("email: %v", err)
+	}
+	if m := loadMessage(t, e.pool, email); m.State != "sent" {
+		t.Errorf("email: %+v; want sent", m)
+	}
+}
+
+// A cancelled campaign sends nothing more, even for a message that cancel
+// did not catch.
+func TestCancelledCampaignSkips(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	if _, err := e.pool.Exec(context.Background(), `UPDATE campaigns SET state = 'cancelled' WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.work(id); err != nil {
+		t.Fatalf("work: %v", err)
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "skipped" || str(m.LastErrorClass) != "cancelled" {
+		t.Errorf("message %+v; want skipped, cancelled", m)
+	}
+	if n := len(e.prov.all()); n != 0 || e.tokensTaken() != 0 {
+		t.Errorf("%d requests and %d tokens for a cancelled campaign", n, e.tokensTaken())
+	}
+}
+
+// Step 1: a message in a terminal state is never sent again.
+func TestTerminalMessagesAreLeftAlone(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	users := consentingUsers(t, e.pool, 4)
+	extras := map[string]string{
+		"sent":    `state = 'sent', attempts = 1, provider_message_id = 'p-1', sent_at = now()`,
+		"failed":  `state = 'failed', attempts = 1, last_error_class = 'client_error'`,
+		"dead":    `state = 'dead', attempts = 6, last_error_class = 'server_error'`,
+		"skipped": `state = 'skipped', last_error_class = 'cancelled'`,
+	}
+	i := 0
+	for state, extra := range extras {
+		id := insertMessage(t, e.pool, c, users[i], "sms", extra)
+		i++
+		if err := e.work(id); err != nil && !cancelled(err) {
+			t.Errorf("%s: %v", state, err)
+		}
+		if m := loadMessage(t, e.pool, id); m.State != state {
+			t.Errorf("%s message moved to %s", state, m.State)
+		}
+	}
+	if n := len(e.prov.all()); n != 0 || e.tokensTaken() != 0 {
+		t.Errorf("%d requests and %d tokens for terminal messages", n, e.tokensTaken())
+	}
+}
+
+// Every update is guarded by its predecessors. If someone else finishes the
+// message while our call is in flight, our late "sent" does not overwrite it.
+func TestSentUpdateIsGuarded(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	e.prov.hooks(func(string) {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE messages SET state = 'sent', provider_message_id = 'other-run', sent_at = now()
+			WHERE id = $1`, id); err != nil {
+			t.Error(err)
+		}
+	}, nil)
+	if err := e.work(id); err != nil && !cancelled(err) {
+		t.Fatalf("work: %v", err)
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "sent" || str(m.ProviderID) != "other-run" {
+		t.Errorf("message %+v; the guarded update overwrote another run's result", m)
+	}
+}
+
+// Retryable outcomes keep their own reason labels: refused is safe, reset
+// and timeout are ambiguous (docs/ARCHITECTURE.md section 7).
+func TestRetryableReasons(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	users := consentingUsers(t, e.pool, 4)
+	cases := []struct{ chaos, class string }{
+		{"500", "server_error"},
+		{"drop", "conn_reset"},
+		{"hang", "timeout"},
+		{"late", "timeout"},
+	}
+	for i, cs := range cases {
+		id := insertMessage(t, e.pool, c, users[i], "sms", "")
+		e.prov.force(id, cs.chaos)
+		if _, ok := snoozed(e.work(id)); !ok {
+			t.Errorf("%s: not snoozed", cs.chaos)
+		}
+		if m := loadMessage(t, e.pool, id); m.State != "queued" || str(m.LastErrorClass) != cs.class {
+			t.Errorf("%s: %+v; want queued with %s", cs.chaos, m, cs.class)
+		}
+	}
+}
+
+// Nothing listening: conn_refused, retried.
+func TestProviderDown(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	e.prov.srv.Close()
+	c := insertSendingCampaign(t, e.pool)
+	id := insertMessage(t, e.pool, c, consentingUsers(t, e.pool, 1)[0], "sms", "")
+	if _, ok := snoozed(e.work(id)); !ok {
+		t.Fatal("not snoozed")
+	}
+	if m := loadMessage(t, e.pool, id); m.State != "queued" || str(m.LastErrorClass) != "conn_refused" || m.Attempts != 1 {
+		t.Errorf("message %+v; want queued, conn_refused, 1 attempt", m)
+	}
+	if e.tokensTaken() != 1 {
+		t.Errorf("%d tokens for one attempt", e.tokensTaken())
+	}
+}
+
+// After the last terminal update the campaign completes, once.
+func TestCampaignCompletion(t *testing.T) {
+	cases := []struct {
+		name   string
+		second string // forced outcome of the second message
+		want   string
+	}{
+		{"all sent", "ok", "completed"},
+		{"one failed", "400", "completed_with_failures"},
+	}
+	for _, cs := range cases {
+		t.Run(cs.name, func(t *testing.T) {
+			e := newSendEnv(t, mockprovider.Config{})
+			c := insertSendingCampaign(t, e.pool)
+			users := consentingUsers(t, e.pool, 2)
+			a := insertMessage(t, e.pool, c, users[0], "sms", "")
+			b := insertMessage(t, e.pool, c, users[1], "email", "")
+			e.prov.force(b, cs.second)
+
+			if err := e.work(a); err != nil {
+				t.Fatal(err)
+			}
+			if state, _ := campaignState(t, e.pool, c.ID); state != "sending" {
+				t.Fatalf("one message left: campaign %s, want sending", state)
+			}
+			if err := e.work(b); err != nil && !cancelled(err) {
+				t.Fatal(err)
+			}
+			state, version := campaignState(t, e.pool, c.ID)
+			if state != cs.want || version != 4 {
+				t.Errorf("campaign %s version %d; want %s version 4", state, version, cs.want)
+			}
+			// A duplicate run of a finished job does not complete it again.
+			if err := e.work(a); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"sending>" + cs.want}
+			if got := auditTrail(t, e.pool, c.ID); !slices.Equal(got, want) {
+				t.Errorf("audit trail %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// Skipped messages are not failures: a campaign whose last message lost its
+// consent completes normally.
+func TestCompletionCountsSkippedAsDone(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	c := insertSendingCampaign(t, e.pool)
+	user := consentingUsers(t, e.pool, 1)[0]
+	id := insertMessage(t, e.pool, c, user, "sms", "")
+	if _, err := e.pool.Exec(context.Background(), `UPDATE users SET consent_sms = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.work(id); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := campaignState(t, e.pool, c.ID); state != "completed" {
+		t.Errorf("campaign %s, want completed", state)
+	}
+}
+
+// A message whose id does not exist is a bug upstream; the job must not
+// retry it forever.
+func TestUnknownMessage(t *testing.T) {
+	e := newSendEnv(t, mockprovider.Config{})
+	err := e.work("00000000-0000-4000-8000-00000000dead")
+	if err != nil && !cancelled(err) {
+		t.Errorf("unknown message: %v; want nil or JobCancel", err)
+	}
+	if errors.Is(err, errCrash) || len(e.prov.all()) != 0 {
+		t.Error("an unknown message reached the provider")
+	}
+}

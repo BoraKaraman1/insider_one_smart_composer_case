@@ -2,12 +2,17 @@
 // picks the subcommand.
 //
 //	app api                        serve the HTTP API (ADMIN_TOKEN, LISTEN_ADDR)
+//	app worker                     run the River workers (LLM_MODE, see internal/llm;
+//	                               PROVIDER_URL)
 //	app migrate                    apply database migrations
 //	app seed [-users N] [-seed S] [-as-of now|RFC3339] [-reset]
 //	                               load synthetic users and events
+//	app mockllm                    serve the fake Messages API (MOCKLLM_ADDR,
+//	                               MOCKLLM_INVALID_FIRST); needs no database
+//	app mockprovider               serve the fake SMS and email provider on its own
+//	                               database (MOCKPROVIDER_DATABASE_URL, MOCKPROVIDER_*)
 //
-// All need DATABASE_URL. More subcommands (worker, mockprovider) are added as
-// they are built.
+// All others need DATABASE_URL.
 package main
 
 import (
@@ -25,6 +30,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/httpapi"
 	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/schema"
@@ -38,13 +45,19 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <api|migrate|seed> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: app <api|worker|migrate|seed|mockllm|mockprovider> [flags]")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "api":
 		err = apiCmd(ctx, log)
+	case "worker":
+		err = workerCmd(ctx, log, os.Getenv)
+	case "mockllm":
+		err = mockllmCmd(ctx, log, os.Getenv)
+	case "mockprovider":
+		err = mockproviderCmd(ctx, log, os.Getenv)
 	case "migrate":
 		err = migrate(ctx)
 	case "seed":
@@ -87,7 +100,13 @@ func apiCmd(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := &httpapi.Server{Config: cfg, Pool: pool, Schemas: schemas, Log: log}
+	// Insert-only: the api enqueues and cancels jobs; the worker runs them.
+	rc, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
+	if err != nil {
+		return err
+	}
+	srv := &httpapi.Server{Config: cfg, Pool: pool, Schemas: schemas, Log: log, River: rc,
+		Hub: httpapi.NewHub(ctx, pool, log)}
 	h, err := srv.Handler()
 	if err != nil {
 		return err

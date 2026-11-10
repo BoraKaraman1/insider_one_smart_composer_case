@@ -53,3 +53,14 @@ func ListOps() []string { return slices.Clone(listOps) }
 
 // NumberOps returns the operators for days_since_signup.
 func NumberOps() []string { return slices.Clone(numberOps) }
+
+// cityNames are the display names of the city slugs, for rendering
+// {{city}}. Each fits the city render limit (internal/content).
+var cityNames = map[string]string{
+	"istanbul": "İstanbul", "ankara": "Ankara", "izmir": "İzmir", "bursa": "Bursa", "antalya": "Antalya",
+	"adana": "Adana", "konya": "Konya", "gaziantep": "Gaziantep", "kocaeli": "Kocaeli", "eskisehir": "Eskişehir",
+}
+
+// CityDisplayName returns the display name of a city slug, or "" for a slug
+// outside the catalog.
+func CityDisplayName(slug string) string { return cityNames[slug] }

@@ -1,0 +1,242 @@
+package delivery
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/riverqueue/river"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/campaign"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/content"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/jobs"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/retry"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/store"
+)
+
+// Send limits (rule 6).
+const (
+	ProviderTimeout = 5 * time.Second // per attempt
+	MaxAttempts     = 6               // then the message is dead
+	MaxAge          = 15 * time.Minute
+)
+
+// SendWorker sends one message per job, on the sms and email queues.
+type SendWorker struct {
+	river.WorkerDefaults[jobs.SendArgs]
+	DB              DB
+	ProviderURL     string
+	Limiters        map[string]Limiter // one per channel; every attempt takes a token
+	ProviderTimeout time.Duration
+	Now             func() time.Time
+	// Backoff gives the delay before retry number n (0 is the first retry),
+	// when the provider sent no Retry-After.
+	Backoff func(retry int) time.Duration
+	Client  *http.Client
+	Log     *slog.Logger
+}
+
+// RandomBackoff is retry.Backoff over a shared, locked random source.
+func RandomBackoff(rng *rand.Rand) func(int) time.Duration {
+	var mu sync.Mutex
+	return func(n int) time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return retry.Backoff(n, rng)
+	}
+}
+
+// Timeout bounds one job run.
+func (w *SendWorker) Timeout(*river.Job[jobs.SendArgs]) time.Duration { return jobs.SendTimeout }
+
+func (w *SendWorker) log() *slog.Logger {
+	if w.Log != nil {
+		return w.Log
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
+// Work sends a message at least once. Every state update is guarded by its
+// predecessors. Retries carry the message id as the idempotency key, so the
+// provider sends once however often this runs. A retryable failure snoozes
+// the job; a permanent one fails the message and cancels the job; a
+// database error is returned, so River runs the job again and the message,
+// still in sending, is reclaimed.
+func (w *SendWorker) Work(ctx context.Context, job *river.Job[jobs.SendArgs]) error {
+	id := job.Args.MessageID
+	log := w.log().With("message_id", id)
+	m, err := store.LoadSend(ctx, w.DB, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return river.JobCancel(fmt.Errorf("send: message %s does not exist", id))
+	}
+	if err != nil {
+		return err
+	}
+	if m.State != "queued" && m.State != "sending" {
+		return nil // terminal: never sent again
+	}
+	if campaign.State(m.CampaignState) == campaign.Cancelled {
+		return w.skip(ctx, log, m, "cancelled")
+	}
+	if !m.Consent {
+		return w.skip(ctx, log, m, "no_consent")
+	}
+
+	lim := w.Limiters[m.Channel]
+	if lim == nil {
+		return fmt.Errorf("send: no limiter for channel %q", m.Channel)
+	}
+	if err := lim.Wait(ctx); err != nil {
+		return err
+	}
+	now := w.Now()
+	attempts, first, ok, err := store.ClaimMessage(ctx, w.DB, id, now)
+	if err != nil || !ok {
+		return err // !ok: another run finished it
+	}
+	payload, err := w.payload(m)
+	if err != nil {
+		// A template the validator let through but the renderer rejects.
+		if _, uerr := store.MarkFinal(ctx, w.DB, id, "failed", string(retry.ClientError), "render: "+err.Error()); uerr != nil {
+			return uerr
+		}
+		return w.finish(ctx, log, m, river.JobCancel(err))
+	}
+	providerID, res, lastErr := w.post(ctx, id, payload)
+	now = w.Now()
+	switch {
+	case res.Class == retry.Success:
+		if _, err := store.MarkSent(ctx, w.DB, id, providerID, now); err != nil {
+			return err
+		}
+		log.Info("message sent", "channel", m.Channel, "attempts", attempts)
+		return w.finish(ctx, log, m, nil)
+
+	case !res.Class.Retryable():
+		if _, err := store.MarkFinal(ctx, w.DB, id, "failed", string(res.Class), lastErr); err != nil {
+			return err
+		}
+		log.Warn("message failed", "channel", m.Channel, "class", res.Class, "attempts", attempts)
+		return w.finish(ctx, log, m, river.JobCancel(fmt.Errorf("send: %s", lastErr)))
+
+	case attempts >= MaxAttempts || now.Sub(first) >= MaxAge:
+		if _, err := store.MarkFinal(ctx, w.DB, id, "dead", string(res.Class), lastErr); err != nil {
+			return err
+		}
+		log.Warn("message dead", "channel", m.Channel, "class", res.Class, "attempts", attempts)
+		return w.finish(ctx, log, m, nil)
+	}
+
+	delay := res.RetryAfter
+	if delay == 0 {
+		delay = w.Backoff(attempts - 1)
+	}
+	if _, err := store.MarkRetry(ctx, w.DB, id, string(res.Class), lastErr, now.Add(delay)); err != nil {
+		return err
+	}
+	log.Info("message retry", "channel", m.Channel, "class", res.Class, "attempts", attempts, "delay_ms", delay.Milliseconds())
+	return river.JobSnooze(delay)
+}
+
+func (w *SendWorker) skip(ctx context.Context, log *slog.Logger, m store.Send, class string) error {
+	if _, err := store.SkipMessage(ctx, w.DB, m.ID, class); err != nil {
+		return err
+	}
+	log.Info("message skipped", "channel", m.Channel, "reason", class)
+	return w.finish(ctx, log, m, nil)
+}
+
+// finish runs the completion check after a terminal update and returns ret.
+func (w *SendWorker) finish(ctx context.Context, log *slog.Logger, m store.Send, ret error) error {
+	if err := campaign.CompleteIfDone(ctx, w.DB, m.CampaignID); err != nil {
+		log.Error("completion check failed", "campaign_id", m.CampaignID, "error", err)
+		return err
+	}
+	return ret
+}
+
+type providerMessage struct {
+	Channel string `json:"channel"`
+	To      string `json:"to"`
+	Subject string `json:"subject,omitempty"`
+	Body    string `json:"body"`
+}
+
+// payload renders the message. The renderer gets a RenderContext, never the
+// users row; contact data goes only to "to".
+func (w *SendWorker) payload(m store.Send) ([]byte, error) {
+	rc := content.RenderContext{FirstName: m.FirstName, LastName: m.LastName, City: m.City, CampaignURL: m.CampaignURL}
+	pm := providerMessage{Channel: m.Channel}
+	var err error
+	if m.Channel == "sms" {
+		pm.To = m.Phone
+		pm.Body, err = content.RenderText(m.SMSBody, rc)
+	} else {
+		pm.To = m.Email
+		if pm.Subject, err = content.RenderText(m.EmailSubject, rc); err == nil {
+			pm.Body, err = content.RenderEmailHTML(m.EmailBody, rc)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(pm)
+}
+
+// post makes one provider call with the message id as the idempotency key.
+// lastErr describes a failure without any message content.
+func (w *SendWorker) post(ctx context.Context, id string, payload []byte) (providerID string, res retry.Result, lastErr string) {
+	timeout := w.ProviderTimeout
+	if timeout <= 0 {
+		timeout = ProviderTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(w.ProviderURL, "/")+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return "", retry.Result{Class: retry.ClientError}, "request: " + err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", id)
+	// net/http treats a request with an Idempotency-Key as replayable and
+	// silently resends it on a dropped connection. That call would take no
+	// limiter token and count no attempt. Without GetBody the transport
+	// cannot replay it, so every retry goes through Work.
+	req.GetBody = nil
+	client := w.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		res := retry.Classify(nil, err, time.Now())
+		return "", res, fmt.Sprintf("provider call failed: %s", res.Class)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		res := retry.Classify(nil, err, time.Now())
+		return "", res, fmt.Sprintf("reading the provider answer failed: %s", res.Class)
+	}
+	res = retry.Classify(resp, nil, time.Now())
+	if res.Class != retry.Success {
+		return "", res, fmt.Sprintf("provider answered %d", resp.StatusCode)
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.ID == "" {
+		// Sent, but we cannot tell the id: retry, the replay will carry it.
+		return "", retry.Result{Class: retry.ServerError}, "provider answered without an id"
+	}
+	return out.ID, res, ""
+}

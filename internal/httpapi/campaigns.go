@@ -35,7 +35,7 @@ func (s *Server) campaignRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/campaigns/{id}", s.withCampaignID(s.getCampaign))
 	api.HandleFunc("POST /api/campaigns/{id}/revisions", s.withCampaignID(s.editCampaign))
 	api.HandleFunc("POST /api/campaigns/{id}/reject", s.withCampaignID(s.versionAction(campaign.Reject)))
-	api.HandleFunc("POST /api/campaigns/{id}/cancel", s.withCampaignID(s.versionAction(campaign.Cancel)))
+	api.HandleFunc("POST /api/campaigns/{id}/cancel", s.withCampaignID(s.versionAction(s.cancel)))
 }
 
 // withCampaignID answers 404 for an id that is not a UUID, so it never
@@ -182,6 +182,15 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request, id string) {
 	s.writeView(w, r, http.StatusOK, id)
+}
+
+// cancel cancels the campaign and, through River, its generate job.
+func (s *Server) cancel(ctx context.Context, db campaign.Beginner, id string, version int, actor string) error {
+	var jc campaign.JobCanceller
+	if s.River != nil {
+		jc = s.River
+	}
+	return campaign.CancelWithJobs(ctx, db, jc, id, version, actor)
 }
 
 // versionAction serves an action whose body is {"version": n}.

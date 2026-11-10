@@ -58,20 +58,31 @@ func Reject(ctx context.Context, db Beginner, id string, version int, actor stri
 
 // Cancel moves a campaign to cancelled from any state that allows it, and in
 // the same transaction takes its queued messages out of the queue. A worker
-// that already holds one of the other messages loses its guarded update.
+// that already holds one of the other messages loses its guarded update. A
+// generating campaign also gets a failed event with reason cancelled, the
+// last event of its stream. The api uses CancelWithJobs, which also cancels
+// the generate job through River.
 func Cancel(ctx context.Context, db Beginner, id string, version int, actor string) error {
-	return inTx(ctx, db, func(tx pgx.Tx) error {
-		c, err := store.GetCampaign(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		// The state read here can be stale; the guarded update then loses.
-		if err := Transition(ctx, tx, Move{ID: id, From: State(c.State), To: Cancelled, Version: version, Actor: actor}); err != nil {
-			return err
-		}
-		_, err = store.SkipQueuedMessages(ctx, tx, id)
+	return CancelWithJobs(ctx, db, nil, id, version, actor)
+}
+
+func cancelTx(ctx context.Context, tx pgx.Tx, id string, version int, actor string) error {
+	c, err := store.GetCampaign(ctx, tx, id)
+	if err != nil {
 		return err
-	})
+	}
+	// The state read here can be stale; the guarded update then loses.
+	from := State(c.State)
+	if err := Transition(ctx, tx, Move{ID: id, From: from, To: Cancelled, Version: version, Actor: actor}); err != nil {
+		return err
+	}
+	if from == Generating {
+		if _, err := store.InsertGenerationEvent(ctx, tx, id, "failed", map[string]any{"reason": ReasonCancelled}); err != nil {
+			return err
+		}
+	}
+	_, err = store.SkipQueuedMessages(ctx, tx, id)
+	return err
 }
 
 // Edit is a human edit of a campaign in review.
