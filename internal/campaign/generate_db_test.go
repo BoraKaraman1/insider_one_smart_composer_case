@@ -69,16 +69,23 @@ func (s *sleepLog) list() []time.Duration {
 	return slices.Clone(s.delays)
 }
 
-func newGen(t *testing.T, p *pgxpool.Pool, asOf time.Time, o mockllm.Options) (*Generator, *mockllm.Server, *sleepLog) {
+// The stall timeout also covers the wait for the first stream event. A tight
+// value trips on a loaded race run and turns a normal reply into a timeout.
+// Only tests that script a stall pass a short one.
+func newGen(t *testing.T, p *pgxpool.Pool, asOf time.Time, o mockllm.Options, stall ...time.Duration) (*Generator, *mockllm.Server, *sleepLog) {
 	t.Helper()
 	m := mockllm.New(o)
 	srv := httptest.NewServer(m)
 	t.Cleanup(srv.Close)
+	stallTimeout := 10 * time.Second
+	if len(stall) > 0 {
+		stallTimeout = stall[0]
+	}
 	cl, err := llm.New(llm.Config{
 		BaseURL:      srv.URL,
 		APIKey:       "test-placeholder",
 		Schemas:      schemas(t),
-		StallTimeout: 300 * time.Millisecond,
+		StallTimeout: stallTimeout,
 		TotalTimeout: 10 * time.Second,
 	})
 	if err != nil {
@@ -515,7 +522,11 @@ func TestGenerateOutcomes(t *testing.T) {
 			[]string{"segment 1 valid", "content 1 invalid", "content 2 transport_error server_error", "content 2 invalid", "content 3 invalid"}, 4, 1},
 	}
 	for _, c := range cases {
-		g, m, sl := newGen(t, p, meta.AsOf, mockllm.Options{})
+		stall := 10 * time.Second
+		if slices.ContainsFunc(c.replies, func(r mockllm.Reply) bool { return r.Stall }) {
+			stall = time.Second
+		}
+		g, m, sl := newGen(t, p, meta.AsOf, mockllm.Options{}, stall)
 		m.Script(c.stage, c.replies...)
 		id := insertGenerating(t, p, exampleBrief, 0)
 		run(t, g, id, 0)
