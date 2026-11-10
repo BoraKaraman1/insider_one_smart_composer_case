@@ -389,6 +389,26 @@ func TestGenerateHappyPath(t *testing.T) {
 	}
 }
 
+func TestGenerateRetriesPlaceholderCopy(t *testing.T) {
+	p, meta := genPool(t)
+	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})
+	placeholder := copyJSON("x", "x", "x")
+	m.Script(mockllm.Content, mockllm.Reply{Text: placeholder}, mockllm.Reply{Text: goodCopy})
+	id := insertGenerating(t, p, exampleBrief, 0)
+	run(t, g, id, 0)
+
+	if got := loadGen(t, p, id); got.State != InReview || got.Revisions != 1 {
+		t.Fatalf("campaign %+v; want in_review with one revision", got)
+	}
+	calls := llmCalls(t, p, id)
+	if want := []string{"segment 1 valid", "content 1 invalid", "content 2 valid"}; !slices.Equal(outcomes(calls), want) {
+		t.Fatalf("llm_calls %v, want %v", outcomes(calls), want)
+	}
+	if !hasCode(calls[1].Errors, "too_short") {
+		t.Errorf("placeholder row errors %v, want too_short", calls[1].Errors)
+	}
+}
+
 func TestGenerateMergesDeltas(t *testing.T) {
 	p, meta := genPool(t)
 	g, m, _ := newGen(t, p, meta.AsOf, mockllm.Options{})

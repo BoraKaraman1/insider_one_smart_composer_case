@@ -194,6 +194,9 @@ func (r *genRun) run(ctx context.Context) error {
 	out, err = r.stage(ctx, llm.NewConversation(llm.Content, llm.ContentTurn(c.Brief, description)), func(text string) validation.Result {
 		var res validation.Result
 		cont, res = content.ValidateJSON(r.g.Schemas, []byte(text))
+		if res.OK() {
+			checkSubstance(cont, &res)
+		}
 		contWarnings = res.Warnings
 		return res
 	}, r.newDeltas)
