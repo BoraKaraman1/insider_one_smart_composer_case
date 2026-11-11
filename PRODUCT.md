@@ -1,6 +1,6 @@
 # Product
 
-<!-- impeccable:product-schema 1 -->
+
 
 ## Platform
 
@@ -33,7 +33,7 @@ Single-admin-token app served by nginx on localhost:8081 in a docker compose sta
 
 ## Brand Commitments
 
-UI copy is Turkish (confirmed by the user). No Insider One branding or logo is established.
+UI copy is English (confirmed by the user). No Insider One branding or logo is established.
 
 ## Evidence on Hand
 
