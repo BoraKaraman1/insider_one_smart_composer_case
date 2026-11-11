@@ -2,13 +2,13 @@
 
 [![ci](https://github.com/BoraKaraman1/insider_one_smart_composer_case/actions/workflows/ci.yml/badge.svg)](https://github.com/BoraKaraman1/insider_one_smart_composer_case/actions/workflows/ci.yml)
 
-Pazarlamacı doğal dilde bir kampanya brief'i yazar; Claude hedef kitle segmentini ve SMS ile e-posta metinlerini önerir. İnsan çıktıyı inceler, gerekirse düzenler ve onaylar. Onaylanan mesajlar Postgres tabanlı iş kuyruğundan (River) geçerek sahte sağlayıcıya (mock provider) iletilir ve teslimat durumu panelde canlı izlenir. Sistem tamamen kapalı devre çalışır, gerçek bir alıcıya hiçbir zaman mesaj gitmez.
+Pazarlamacı doğal dilde bir kampanya brief'i yazar, Claude hedef kitle segmentini ve SMS ile e-posta metinlerini önerir. İnsan çıktıyı inceler, gerekirse düzenler ve onaylar. Onaylanan mesajlar Postgres tabanlı iş kuyruğundan (River) geçerek sahte sağlayıcıya (mock provider) iletilir ve teslimat durumu panelde canlı izlenir. Sistem tamamen kapalı devre çalışır, gerçek bir alıcıya hiçbir zaman mesaj gitmez.
 
 **Teknoloji yığını:** Go (backend), Postgres (veri ve iş kuyruğu), Vue 3 (frontend), Claude Messages API.
 
 Tasarımın tüm teknik detayları [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) dosyasında, mimari kararların gerekçeleri ve geliştirme süreci ise [DECISIONS.md](DECISIONS.md) dosyasında yer alıyor. Bu README projeyi hızlıca ayağa kaldırmak ve genel yapıyı görmek için.
 
-> **Not:** Koda başlamadan önce case'i incelediğim kısa bir ön araştırma oturumu yaptım; o oturum `ai-sessions/` altında yok. Kod yazılan tüm ajan oturumları ise kişisel bilgilerden arındırılmış olarak `ai-sessions/` klasöründe mevcut.
+> **Not:** Koda başlamadan önce case'i incelediğim kısa bir ön araştırma oturumu yaptım, o oturum `ai-sessions/` altında yok. Kod yazılan tüm ajan oturumları ise kişisel bilgilerden arındırılmış olarak `ai-sessions/` klasöründe mevcut.
 
 ## Hızlı Başlangıç
 
@@ -18,7 +18,7 @@ Gereksinimler: yalnızca Docker ve Docker Compose. Herhangi bir API anahtarına 
 make up
 ```
 
-Tarayıcıda `http://127.0.0.1:8081` adresini açıp giriş token'ı olarak `dev-admin-token` yazman yeterli.
+Tarayıcıda `http://127.0.0.1:8081` adresini açıp giriş token'ı olarak `dev-admin-token` yazmak yeterli.
 
 `make up` komutu sırasıyla veritabanı migrasyonlarını çalıştırır, yaklaşık 5.000 sentetik kullanıcıdan oluşan seed verisini yükler ve ardından `api`, `worker`, `mockllm`, `mockprovider` ile `web` servislerini başlatır. Varsayılan çalışma modu `LLM_MODE=mock` olduğu için Claude API yerine yerel `mockllm` servisi kullanılır.
 
@@ -35,22 +35,22 @@ Güvenlik gereği tüm portlar yalnızca yerel arayüzde (`127.0.0.1`) açılır
 
 ### Gerçek Claude API ile çalıştırmak
 
-Kendi terminalinde `.env.example` dosyasını `.env` olarak kopyalayıp anahtarını ekleyebilirsin:
+Kendi terminalinizde `.env.example` dosyasını `.env` olarak kopyalayıp anahtarını ekleyebilirsiniz:
 
 ```env
 LLM_MODE=anthropic
 ANTHROPIC_API_KEY=...
 ```
 
-Ardından tekrar `make up` çalıştırman yeterli. API anahtarı yalnızca `worker` konteynerine verilir. `LLM_MODE=anthropic` seçildiği halde anahtar verilmezse `worker` sessizce mock moduna düşmez; doğrudan hata vererek kapanır (fail-closed).
+Ardından tekrar `make up` çalıştırmanız yeterli. API anahtarı yalnızca `worker` konteynerine verilir. `LLM_MODE=anthropic` seçildiği halde anahtar verilmezse `worker` sessizce mock moduna düşmez; doğrudan hata vererek kapanır (fail-closed).
 
 ### İlk deneme için örnek akış
 
-1. Brief alanına örneğin şunu yaz: *"İstanbul'da son 30 günde sepete ürün ekleyip satın almayan müşterilere %20 indirim kampanyası"*.
-2. Kampanya linki için izinli örnek URL'lerden birini seç (`https://shop.example/...`).
-3. Üretimi başlat. Segment kuralları ve metinler SSE üzerinden ekrana gelir. Derleyicinin ürettiği kural açıklamasını, eşleşen kişi sayısını ve SMS/e-posta taslaklarını incele.
-4. İstersen metinleri düzenle. Yaptığın her düzenleme LLM çıktısıyla birebir aynı doğrulayıcıdan geçer.
-5. Kampanyayı onayla. Teslimat panelinde mesaj durumlarının canlı akışını, takılan veya hata alan mesajları ise "Needs attention" tablosunda görebilirsin.
+1. Brief alanına örneğin şunu yazın: *"İstanbul'da son 30 günde sepete ürün ekleyip satın almayan müşterilere %20 indirim kampanyası"*.
+2. Kampanya linki için izinli örnek URL'lerden birini seçin (`https://shop.example/...`).
+3. Üretimi başlatın. Segment kuralları ve metinler SSE üzerinden ekrana gelir. Derleyicinin ürettiği kural açıklamasını, eşleşen kişi sayısını ve SMS/e-posta taslaklarını inceleyebilirsiniz.
+4. İsterseniz metinleri düzenleyin. Yapılan her düzenleme LLM çıktısıyla birebir aynı doğrulayıcıdan geçer.
+5. Kampanyayı onaylayın. Teslimat panelinde mesaj durumlarının canlı akışını, takılan veya hata alan mesajları ise "Needs attention" tablosunda görebilirsiniz.
 
 ### Farklı kitle büyüklüklerini denemek
 
@@ -159,13 +159,13 @@ Hiçbir test komutu API anahtarı veya dış internet bağlantısı gerektirmez.
 
 `make eval` komutu `evals/` altındaki 10 altın brief'i (7 normal senaryo, 3 prompt injection denemesi) `campaign.Generator.Run` üzerinden koşturur ve sonucu `evals/report-mock.md` dosyasına yazar.
 
-Gerçek Claude modeliyle değerlendirme yapmak için kendi terminalinde:
+Gerçek Claude modeliyle değerlendirme yapmak için kendi terminalinizde:
 
 ```sh
 LLM_MODE=anthropic make eval
 ```
 
-komutunu çalıştırabilirsin. Bu modda yalnızca `ANTHROPIC_API_KEY` ve `ANTHROPIC_MODEL` değişkenleri `.env` dosyasından (veya kabuktan) okunur ve çıktı `evals/report-anthropic.md` dosyasına yazılır. Raporlarda hiçbir gizli anahtar veya alıcı verisi yer almaz.
+komutunu çalıştırabilirsiniz. Bu modda yalnızca `ANTHROPIC_API_KEY` ve `ANTHROPIC_MODEL` değişkenleri `.env` dosyasından (veya kabuktan) okunur ve çıktı `evals/report-anthropic.md` dosyasına yazılır. Raporlarda hiçbir gizli anahtar veya alıcı verisi yer almaz.
 
 `claude-sonnet-5-5` ile yaptığım örnek koşuda (10 brief): 7 normal brief'in tamamı beklenen segmenti yakaladı, 3 injection denemesinin tamamı güvenli kaldı (`unsafe` çıktı: 0). Yalnızca bir kampanya metni ilk denemede karakter sınırını aştı (`rendered_too_long`) ve ikinci denemede otomatik onarıldı. Yani otomatik yeniden deneme özelliği mevcut.
 
@@ -190,7 +190,7 @@ Otomatik testlere ek olarak `make up` ile tüm stack üzerinde şu senaryoları 
 | Onaylanmış kampanyayı düzenlemeyi deneme | Düzenleme isteği reddedildi |
 | Sağlayıcı hata (chaos) oranlarını yükseltme | Sıfır mükerrer gönderim; kalıcı hata alan mesajlar "Needs attention" tablosuna düştü |
 | Gönderim sürerken `worker` konteynerini öldürüp yeniden başlatma | Kuyruk kaldığı yerden devam etti, çift mesaj gönderilmeden kampanya tamamlandı |
-| Anahtarsız mock mod ve hatalı API anahtarı | Mock mod sorunsuz çalıştı; hatalı anahtarda açık hata mesajı döndü |
+| Anahtarsız mock mod ve hatalı API anahtarı | Mock mod sorunsuz çalıştı ve hatalı anahtarda açık hata mesajı döndü |
 
 ## Yapılmayanlar ve Bilinen Sınırlar
 
