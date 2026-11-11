@@ -1,0 +1,1019 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// DB runs queries. *pgxpool.Pool, *pgx.Conn and pgx.Tx satisfy it.
+type DB interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// ErrNotFound is returned when a row does not exist.
+var ErrNotFound = errors.New("not found")
+
+// Campaign is a campaigns row.
+type Campaign struct {
+	ID                 string     `json:"id"`
+	Brief              string     `json:"brief"`
+	State              string     `json:"state"`
+	Version            int        `json:"version"`
+	CampaignURL        *string    `json:"campaign_url"`
+	CurrentRevisionID  *string    `json:"current_revision_id"`
+	ApprovedRevisionID *string    `json:"approved_revision_id"`
+	ApprovedBy         *string    `json:"approved_by"`
+	ApprovedAt         *time.Time `json:"approved_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+const campaignCols = `id::text, brief, state::text, version, campaign_url, current_revision_id::text,
+	approved_revision_id::text, approved_by, approved_at, created_at, updated_at`
+
+func scanCampaign(row pgx.Row) (Campaign, error) {
+	var c Campaign
+	err := row.Scan(&c.ID, &c.Brief, &c.State, &c.Version, &c.CampaignURL, &c.CurrentRevisionID,
+		&c.ApprovedRevisionID, &c.ApprovedBy, &c.ApprovedAt, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Campaign{}, ErrNotFound
+	}
+	return c, err
+}
+
+// CreateCampaign inserts a draft campaign.
+func CreateCampaign(ctx context.Context, db DB, brief, campaignURL string) (Campaign, error) {
+	return scanCampaign(db.QueryRow(ctx, `INSERT INTO campaigns (brief, campaign_url) VALUES ($1, $2) RETURNING `+campaignCols,
+		brief, campaignURL))
+}
+
+// GetCampaign reads one campaign, or returns ErrNotFound.
+func GetCampaign(ctx context.Context, db DB, id string) (Campaign, error) {
+	return scanCampaign(db.QueryRow(ctx, `SELECT `+campaignCols+` FROM campaigns WHERE id = $1`, id))
+}
+
+// UpdateCampaignState is the guarded update of rule 7. It reports false when
+// the campaign is not in state from at version, or does not exist.
+func UpdateCampaignState(ctx context.Context, db DB, id, from, to string, version int) (bool, error) {
+	tag, err := db.Exec(ctx, `UPDATE campaigns SET state = $2, version = version + 1, updated_at = now()
+		WHERE id = $1 AND state = $3 AND version = $4`, id, to, from, version)
+	return tag.RowsAffected() == 1, err
+}
+
+// InsertCampaignEvent writes one audit row. An empty from is stored as NULL
+// (the campaign was just created).
+func InsertCampaignEvent(ctx context.Context, db DB, id, from, to, actor, reason string) error {
+	_, err := db.Exec(ctx, `INSERT INTO campaign_events (campaign_id, from_state, to_state, actor, reason)
+		VALUES ($1, NULLIF($2, ''), $3, $4, $5)`, id, from, to, actor, reason)
+	return err
+}
+
+// Event is a campaign_events row.
+type Event struct {
+	From   *string   `json:"from_state"`
+	To     string    `json:"to_state"`
+	Actor  string    `json:"actor"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// ListCampaignEvents returns a campaign's audit trail, oldest first.
+func ListCampaignEvents(ctx context.Context, db DB, id string) ([]Event, error) {
+	rows, err := db.Query(ctx, `SELECT from_state::text, to_state::text, actor, reason, at
+		FROM campaign_events WHERE campaign_id = $1 ORDER BY id`, id)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Event, error) {
+		var e Event
+		err := r.Scan(&e.From, &e.To, &e.Actor, &e.Reason, &e.At)
+		return e, err
+	})
+}
+
+// SkipQueuedMessages takes a cancelled campaign's queued messages out of the
+// queue. Messages being sent or already final are left alone.
+func SkipQueuedMessages(ctx context.Context, db DB, campaignID string) (int64, error) {
+	tag, err := db.Exec(ctx, `UPDATE messages SET state = 'skipped', last_error_class = 'cancelled', updated_at = now()
+		WHERE campaign_id = $1 AND state = 'queued'`, campaignID)
+	return tag.RowsAffected(), err
+}
+
+// Revision is a campaign_revisions row.
+type Revision struct {
+	ID            string          `json:"id"`
+	CampaignID    string          `json:"campaign_id"`
+	N             int             `json:"n"`
+	Source        string          `json:"source"`
+	Segment       json.RawMessage `json:"segment"`
+	SMSBody       string          `json:"sms_body"`
+	EmailSubject  string          `json:"email_subject"`
+	EmailBody     string          `json:"email_body"`
+	Warnings      json.RawMessage `json:"warnings"`
+	AudienceTotal *int            `json:"audience_total"`
+	SMSEligible   *int            `json:"sms_eligible"`
+	EmailEligible *int            `json:"email_eligible"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+const revisionCols = `id::text, campaign_id::text, n, source, segment, sms_body, email_subject, email_body,
+	warnings, audience_total, sms_eligible, email_eligible, created_at`
+
+func scanRevision(row pgx.Row) (Revision, error) {
+	var r Revision
+	err := row.Scan(&r.ID, &r.CampaignID, &r.N, &r.Source, &r.Segment, &r.SMSBody, &r.EmailSubject, &r.EmailBody,
+		&r.Warnings, &r.AudienceTotal, &r.SMSEligible, &r.EmailEligible, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Revision{}, ErrNotFound
+	}
+	return r, err
+}
+
+// GetRevision reads one revision of a campaign, or returns ErrNotFound.
+func GetRevision(ctx context.Context, db DB, campaignID, id string) (Revision, error) {
+	return scanRevision(db.QueryRow(ctx, `SELECT `+revisionCols+` FROM campaign_revisions WHERE campaign_id = $1 AND id = $2`,
+		campaignID, id))
+}
+
+// NewRevision is a validated revision to store.
+type NewRevision struct {
+	CampaignID    string
+	Source        string // "llm" or "human"
+	Segment       []byte // normalized rule JSON
+	SMSBody       string
+	EmailSubject  string
+	EmailBody     string
+	Warnings      []byte // JSON array of issues
+	AudienceTotal int
+	SMSEligible   int
+	EmailEligible int
+}
+
+// InsertRevision stores the next revision of a campaign and makes it the
+// current one. The caller holds the campaign row lock (a transition in the
+// same transaction), so the revision number cannot race.
+func InsertRevision(ctx context.Context, db DB, nr NewRevision) (Revision, error) {
+	r, err := scanRevision(db.QueryRow(ctx, `INSERT INTO campaign_revisions
+		(campaign_id, n, source, segment, sms_body, email_subject, email_body, warnings, audience_total, sms_eligible, email_eligible)
+		VALUES ($1, (SELECT coalesce(max(n), 0) + 1 FROM campaign_revisions WHERE campaign_id = $1),
+			$2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING `+revisionCols,
+		nr.CampaignID, nr.Source, string(nr.Segment), nr.SMSBody, nr.EmailSubject, nr.EmailBody, string(nr.Warnings),
+		nr.AudienceTotal, nr.SMSEligible, nr.EmailEligible))
+	if err != nil {
+		return Revision{}, err
+	}
+	_, err = db.Exec(ctx, `UPDATE campaigns SET current_revision_id = $2, updated_at = now() WHERE id = $1`, nr.CampaignID, r.ID)
+	return r, err
+}
+package store
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
+)
+
+// Migration 00004 adds messages.first_attempt_at. The send worker sets it
+// once, on the first attempt, and declares a message dead 15 minutes later.
+// It is empty until then, so it must be nullable.
+func TestMessagesHaveFirstAttemptAt(t *testing.T) {
+	url, _ := testdb.Seeded(t)
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var typ, nullable string
+	err = db.QueryRow(`SELECT data_type, is_nullable FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'first_attempt_at'`).Scan(&typ, &nullable)
+	if err == sql.ErrNoRows {
+		t.Fatal("messages.first_attempt_at does not exist (migration 00004)")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ != "timestamp with time zone" || nullable != "YES" {
+		t.Errorf("first_attempt_at is %s, nullable %s; want a nullable timestamptz", typ, nullable)
+	}
+	// A queued message that was never tried has no first attempt.
+	var def sql.NullString
+	if err := db.QueryRow(`SELECT column_default FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'first_attempt_at'`).Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	if def.Valid {
+		t.Errorf("first_attempt_at has default %q; it must stay empty until the first attempt", def.String)
+	}
+}
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
+)
+
+func seededPool(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
+	url, _ := testdb.Seeded(t)
+	p, err := pgxpool.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	return p, url
+}
+
+func newCampaignID(t *testing.T, p *pgxpool.Pool) string {
+	t.Helper()
+	var id string
+	if err := p.QueryRow(context.Background(), `INSERT INTO campaigns (brief) VALUES ('b') RETURNING id::text`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// The event log is what SSE replays: ordered by id, filtered by campaign,
+// and resumable from any id.
+func TestGenerationEventLog(t *testing.T) {
+	p, _ := seededPool(t)
+	ctx := context.Background()
+	a, b := newCampaignID(t, p), newCampaignID(t, p)
+	payloads := []map[string]any{{"n": 1.0}, {"field": "sms.body", "text": "Mer"}, {"revision_id": "r"}}
+	types := []string{"segment_ready", "delta", "done"}
+	var ids []int64
+	for i := range types {
+		id, err := InsertGenerationEvent(ctx, p, a, types[i], payloads[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+		if _, err := InsertGenerationEvent(ctx, p, b, "delta", map[string]any{"other": true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !(ids[0] < ids[1] && ids[1] < ids[2]) {
+		t.Fatalf("ids %v are not increasing", ids)
+	}
+
+	all, err := ListGenerationEvents(ctx, p, a, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("%d events, want 3 (another campaign's events must not show)", len(all))
+	}
+	for i, e := range all {
+		var got map[string]any
+		if err := json.Unmarshal(e.Payload, &got); err != nil {
+			t.Fatal(err)
+		}
+		if e.ID != ids[i] || e.CampaignID != a || e.Type != types[i] || !reflect.DeepEqual(got, payloads[i]) || e.CreatedAt.IsZero() {
+			t.Errorf("event %d: %+v (payload %v)", i, e, got)
+		}
+	}
+	after, err := ListGenerationEvents(ctx, p, a, ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 2 || after[0].ID != ids[1] || after[1].ID != ids[2] {
+		t.Errorf("after %d: %+v, want the last two", ids[0], after)
+	}
+	if rest, err := ListGenerationEvents(ctx, p, a, ids[2]); err != nil || len(rest) != 0 {
+		t.Errorf("after the last id: %v %v, want none", rest, err)
+	}
+}
+
+// Every insert notifies listeners with the campaign id, and only once the
+// transaction commits, so a listener never reads an event that is not there.
+func TestGenerationEventNotify(t *testing.T) {
+	p, url := seededPool(t)
+	ctx := context.Background()
+	id := newCampaignID(t, p)
+
+	listener, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close(ctx)
+	if _, err := listener.Exec(ctx, "LISTEN "+GenerationEventsChannel); err != nil {
+		t.Fatal(err)
+	}
+	if GenerationEventsChannel != "generation_events" {
+		t.Errorf("channel %q, want generation_events", GenerationEventsChannel)
+	}
+
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := InsertGenerationEvent(ctx, tx, id, "delta", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	wait := func(d time.Duration) (string, error) {
+		wctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		n, err := listener.WaitForNotification(wctx)
+		if err != nil {
+			return "", err
+		}
+		return n.Channel + " " + n.Payload, nil
+	}
+	if got, err := wait(200 * time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("notified before commit: %q %v", got, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := wait(5 * time.Second)
+	if err != nil || got != "generation_events "+id {
+		t.Errorf("after commit: %q %v, want %q", got, err, "generation_events "+id)
+	}
+}
+
+// Migration 00003 adds prompt_version to llm_calls.
+func TestLLMCallsPromptVersion(t *testing.T) {
+	p, _ := seededPool(t)
+	ctx := context.Background()
+	id := newCampaignID(t, p)
+	var got string
+	err := p.QueryRow(ctx, `INSERT INTO llm_calls (campaign_id, stage, attempt, outcome, model, latency_ms, prompt_version)
+		VALUES ($1, 'segment', 1, 'valid', 'claude-opus-5-5', 5, 'segment-v1') RETURNING prompt_version`, id).Scan(&got)
+	if err != nil || got != "segment-v1" {
+		t.Errorf("prompt_version %q, %v", got, err)
+	}
+}
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// Querier runs one query. *pgxpool.Pool, *pgx.Conn and pgx.Tx satisfy it.
+type Querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// SeededAt returns the seed's time anchor from seed_meta, or nil if the
+// database was never seeded.
+func SeededAt(ctx context.Context, q Querier) (*time.Time, error) {
+	var t time.Time
+	err := q.QueryRow(ctx, "SELECT as_of FROM seed_meta").Scan(&t)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t = t.UTC()
+	return &t, nil
+}
+// Package store owns all SQL that is not compiled from a segment rule, and
+// the migration runner.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/migrations"
+)
+
+// riverLock serializes River migrations across concurrent runs, like the
+// goose session lock does for the app migrations.
+const riverLock int64 = 0x717e7
+
+// newMigrator builds a goose provider over the embedded migrations. A
+// Postgres advisory lock makes concurrent runs (compose setup, tests) wait
+// for each other instead of racing.
+func newMigrator(db *sql.DB) (*goose.Provider, error) {
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return nil, err
+	}
+	return goose.NewProvider(goose.DialectPostgres, db, migrations.FS, goose.WithSessionLocker(locker))
+}
+
+// newRiverMigrator builds a River migrator. The driver has no pool, so only
+// the Tx variants work; callers pass a transaction on db's connection.
+func newRiverMigrator() (*rivermigrate.Migrator[pgx.Tx], error) {
+	return rivermigrate.New(riverpgxv5.New(nil), &rivermigrate.Config{Logger: slog.New(slog.DiscardHandler)})
+}
+
+// inTx runs fn in a transaction on one pgx connection taken from db, and
+// commits if fn succeeds.
+func inTx(ctx context.Context, db *sql.DB, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return conn.Raw(func(dc any) error {
+		tx, err := dc.(*stdlib.Conn).Conn().BeginTx(ctx, opts)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		if err := fn(tx); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	})
+}
+
+// Migrate applies every pending migration: the app's (goose), then River's
+// queue tables (rivermigrate). It does not close db.
+func Migrate(ctx context.Context, db *sql.DB) error {
+	p, err := newMigrator(db)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	rm, err := newRiverMigrator()
+	if err != nil {
+		return fmt.Errorf("migrate river: %w", err)
+	}
+	err = inTx(ctx, db, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", riverLock); err != nil {
+			return err
+		}
+		_, err := rm.MigrateTx(ctx, tx, rivermigrate.DirectionUp, nil)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("migrate river: %w", err)
+	}
+	return nil
+}
+
+// Pending reports whether db lacks any embedded migration or any River
+// migration (for /readyz). It only reads, so it takes no lock.
+func Pending(ctx context.Context, db *sql.DB) (bool, error) {
+	p, err := goose.NewProvider(goose.DialectPostgres, db, migrations.FS)
+	if err != nil {
+		return false, err
+	}
+	pending, err := p.HasPending(ctx)
+	if err != nil || pending {
+		return pending, err
+	}
+	rm, err := newRiverMigrator()
+	if err != nil {
+		return false, err
+	}
+	var ok bool
+	err = inTx(ctx, db, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		res, err := rm.ValidateTx(ctx, tx, nil)
+		if err != nil {
+			return err
+		}
+		ok = res.OK
+		return nil
+	})
+	return !ok, err
+}
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"regexp"
+	"slices"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/segment"
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
+)
+
+// freshDB opens an empty, unmigrated database for one test.
+func freshDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("pgx", testdb.Fresh(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+var appTables = []string{"users", "user_events", "seed_meta", "campaigns", "campaign_revisions", "campaign_events", "llm_calls", "messages"}
+
+func tablesPresent(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	var present []string
+	for _, tbl := range appTables {
+		var ok bool
+		if err := db.QueryRow("SELECT to_regclass('public.' || $1) IS NOT NULL", tbl).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			present = append(present, tbl)
+		}
+	}
+	return present
+}
+
+func TestMigrateUpDownUp(t *testing.T) {
+	ctx := context.Background()
+	db := freshDB(t)
+
+	pending := func(want bool) {
+		t.Helper()
+		if got, err := Pending(ctx, db); err != nil || got != want {
+			t.Fatalf("Pending = %v, %v; want %v", got, err, want)
+		}
+	}
+	pending(true)
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	pending(false)
+	if got := tablesPresent(t, db); !slices.Equal(got, appTables) {
+		t.Fatalf("after up: tables %v, want %v", got, appTables)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("second run is not a no-op: %v", err)
+	}
+	p, err := newMigrator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := p.GetDBVersion(ctx); err != nil || v != 2 {
+		t.Fatalf("version %d, %v; want 2", v, err)
+	}
+
+	if _, err := p.DownTo(ctx, 0); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if got := tablesPresent(t, db); len(got) != 0 {
+		t.Fatalf("after down: tables left %v", got)
+	}
+	pending(true)
+	var domains int
+	if err := db.QueryRow("SELECT count(*) FROM pg_type WHERE typtype = 'd' AND typnamespace = 'public'::regnamespace").Scan(&domains); err != nil || domains != 0 {
+		t.Fatalf("after down: %d domains left (%v)", domains, err)
+	}
+
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+}
+
+// pgCode returns the Postgres error code of err, or "" for success.
+func pgCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	if err != nil {
+		return "not a Postgres error: " + err.Error()
+	}
+	return ""
+}
+
+const (
+	notNull = "23502"
+	fkey    = "23503"
+	unique  = "23505"
+	check   = "23514"
+)
+
+func TestConstraints(t *testing.T) {
+	ctx := context.Background()
+	db := freshDB(t)
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatalf("setup %q: %v", q, err)
+		}
+	}
+	const (
+		user  = "00000000-0000-4000-8000-000000000001"
+		campA = "00000000-0000-4000-8000-0000000000a1"
+		campB = "00000000-0000-4000-8000-0000000000b1"
+		revA  = "00000000-0000-4000-8000-0000000000a2"
+		revB  = "00000000-0000-4000-8000-0000000000b2"
+	)
+	insertUser := `INSERT INTO users (id, first_name, last_name, email, phone, city, language, loyalty_tier, signup_at, consent_sms, consent_email)
+		VALUES ($1, 'Ayşe', 'Yılmaz', $2, '+90 000 000 0001', $3, $4, 'gold', now(), true, true)`
+	mustExec(insertUser, user, "user1@example.com", "istanbul", "tr")
+	mustExec(`INSERT INTO campaigns (id, brief) VALUES ($1, 'brief a'), ($2, 'brief b')`, campA, campB)
+	insertRev := `INSERT INTO campaign_revisions (id, campaign_id, n, source, segment, sms_body, email_subject, email_body)
+		VALUES ($1, $2, 1, 'llm', '{}', 'sms', 'subject', 'body')`
+	mustExec(insertRev, revA, campA)
+	mustExec(insertRev, revB, campB)
+	insertMsg := `INSERT INTO messages (campaign_id, revision_id, user_id, channel) VALUES ($1, $2, $3, $4)`
+	mustExec(insertMsg, campA, revA, user, "sms")
+
+	cases := []struct {
+		name  string
+		query string
+		args  []any
+		want  string
+	}{
+		{"user city outside the catalog", insertUser, []any{"00000000-0000-4000-8000-000000000002", "u2@example.com", "paris", "tr"}, check},
+		{"user language outside the catalog", insertUser, []any{"00000000-0000-4000-8000-000000000003", "u3@example.com", "istanbul", "de"}, check},
+		{"user without a city", insertUser, []any{"00000000-0000-4000-8000-000000000004", "u4@example.com", nil, "tr"}, notNull},
+		{"duplicate email", insertUser, []any{"00000000-0000-4000-8000-000000000005", "user1@example.com", "ankara", "tr"}, unique},
+		{"event type outside the catalog", `INSERT INTO user_events (user_id, type, occurred_at) VALUES ($1, 'signup', now())`, []any{user}, check},
+		{"second seed_meta row", `INSERT INTO seed_meta (id, as_of, seed, user_count) VALUES (false, now(), 1, 1)`, nil, check},
+		{"approved without a revision", `UPDATE campaigns SET state = 'approved' WHERE id = $1`, []any{campA}, check},
+		{"half an approval", `UPDATE campaigns SET approved_by = 'marketer' WHERE id = $1`, []any{campA}, check},
+		{"approving another campaign's revision",
+			`UPDATE campaigns SET state = 'approved', approved_revision_id = $2, approved_by = 'marketer', approved_at = now() WHERE id = $1`,
+			[]any{campA, revB}, fkey},
+		{"unknown campaign state", `UPDATE campaigns SET state = 'paused' WHERE id = $1`, []any{campA}, check},
+		{"revision number 0", `INSERT INTO campaign_revisions (campaign_id, n, source, segment, sms_body, email_subject, email_body) VALUES ($1, 0, 'llm', '{}', 's', 's', 'b')`, []any{campA}, check},
+		{"same message twice", insertMsg, []any{campA, revA, user, "sms"}, unique},
+		{"message for another campaign's revision", insertMsg, []any{campA, revB, user, "email"}, fkey},
+		{"unknown channel", insertMsg, []any{campA, revA, user, "push"}, check},
+		{"retrying is not a state", `UPDATE messages SET state = 'retrying'`, nil, check},
+		{"sent without a provider id", `UPDATE messages SET state = 'sent', sent_at = now()`, nil, check},
+		{"failed without a reason", `UPDATE messages SET state = 'failed'`, nil, check},
+		{"unknown reason label", `UPDATE messages SET last_error_class = 'oops'`, nil, check},
+		{"negative attempts", `UPDATE messages SET attempts = -1`, nil, check},
+	}
+	for _, c := range cases {
+		if got := pgCode(execErr(db, c.query, c.args...)); got != c.want {
+			t.Errorf("%s: got %q, want %s", c.name, got, c.want)
+		}
+	}
+
+	// The valid paths still work.
+	valid := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"approve own revision", `UPDATE campaigns SET state = 'approved', approved_revision_id = $2, approved_by = 'marketer', approved_at = now() WHERE id = $1`, []any{campA, revA}},
+		{"mark sent with provider id", `UPDATE messages SET state = 'sent', provider_message_id = 'p-1', sent_at = now()`, nil},
+		{"seed_meta first row", `INSERT INTO seed_meta (as_of, seed, user_count) VALUES (now(), 42, 1)`, nil},
+	}
+	for _, v := range valid {
+		if err := execErr(db, v.query, v.args...); err != nil {
+			t.Errorf("%s: %v", v.name, err)
+		}
+	}
+}
+
+func execErr(db *sql.DB, q string, args ...any) error {
+	_, err := db.Exec(q, args...)
+	return err
+}
+
+// TestCatalogChecksMatchGo keeps the database CHECK lists equal to the Go
+// catalog, the third copy next to the JSON Schema.
+func TestCatalogChecksMatchGo(t *testing.T) {
+	db := freshDB(t)
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	quoted := regexp.MustCompile(`'([^']*)'::text`)
+	cases := []struct {
+		table, column string
+		want          []string
+	}{
+		{"users", "city", segment.EnumValues("city")},
+		{"users", "language", segment.EnumValues("language")},
+		{"users", "loyalty_tier", segment.EnumValues("loyalty_tier")},
+		{"user_events", "type", segment.EventTypes()},
+	}
+	for _, c := range cases {
+		var def string
+		err := db.QueryRow(`SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+			JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+			WHERE c.conrelid = $1::regclass AND c.contype = 'c' AND a.attname = $2`, c.table, c.column).Scan(&def)
+		if err != nil {
+			t.Fatalf("%s.%s: %v", c.table, c.column, err)
+		}
+		var got []string
+		for _, m := range quoted.FindAllStringSubmatch(def, -1) {
+			got = append(got, m[1])
+		}
+		slices.Sort(got)
+		want := slices.Sorted(slices.Values(c.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s.%s CHECK has %v, Go catalog has %v", c.table, c.column, got, want)
+		}
+	}
+}
+package store
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	"github.com/BoraKaraman1/insider_one_smart_composer_case/internal/testdb"
+)
+
+// The tables rivermigrate creates. Jobs cannot be inserted without them.
+var riverTables = []string{"river_job", "river_leader", "river_queue", "river_migration"}
+
+func missingRiverTables(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	var missing []string
+	for _, tbl := range riverTables {
+		var ok bool
+		if err := db.QueryRow("SELECT to_regclass('public.' || $1) IS NOT NULL", tbl).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			missing = append(missing, tbl)
+		}
+	}
+	return missing
+}
+
+// TestMigrateRunsRiver checks that Migrate creates the River tables after
+// the goose migrations, and that a second run is a no-op.
+func TestMigrateRunsRiver(t *testing.T) {
+	ctx := context.Background()
+	db := freshDB(t)
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if missing := missingRiverTables(t, db); len(missing) != 0 {
+		t.Fatalf("after Migrate: River tables missing: %v", missing)
+	}
+	if pending, err := Pending(ctx, db); err != nil || pending {
+		t.Fatalf("after Migrate: Pending = %v, %v; want false", pending, err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("second run is not a no-op: %v", err)
+	}
+}
+
+// TestPendingCoversRiver applies only the goose migrations. The database
+// then has every app table but no River tables, so it is not ready: /readyz
+// must not report ok for a database the worker cannot use.
+func TestPendingCoversRiver(t *testing.T) {
+	ctx := context.Background()
+	db := freshDB(t)
+	p, err := newMigrator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if missing := missingRiverTables(t, db); len(missing) != len(riverTables) {
+		t.Fatalf("goose alone created River tables; this test no longer isolates them (missing %v)", missing)
+	}
+	if pending, err := Pending(ctx, db); err != nil || !pending {
+		t.Fatalf("goose done, River missing: Pending = %v, %v; want true", pending, err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate on a goose-only database: %v", err)
+	}
+	if pending, err := Pending(ctx, db); err != nil || pending {
+		t.Fatalf("after Migrate: Pending = %v, %v; want false", pending, err)
+	}
+}
+
+// TestTemplateHasRiver checks the template that make test builds, so every
+// integration package gets River tables in its clone.
+func TestTemplateHasRiver(t *testing.T) {
+	url, _ := testdb.Seeded(t)
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if missing := missingRiverTables(t, db); len(missing) != 0 {
+		t.Fatalf("template clone lacks River tables: %v", missing)
+	}
+	if pending, err := Pending(context.Background(), db); err != nil || pending {
+		t.Fatalf("template clone: Pending = %v, %v; want false", pending, err)
+	}
+}
+-- Recipients and their events: the data a segment rule selects from.
+-- Every catalog column is NOT NULL, so neq / not_in never meet SQL's
+-- three-valued logic (docs/segment-rules.md, Semantics). The CHECK lists
+-- repeat the Go catalog (internal/segment/catalog.go); a test fails if they
+-- drift apart. No password, token or secret columns exist anywhere (rule 9).
+
+-- +goose Up
+CREATE TABLE users (
+    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    first_name    text        NOT NULL DEFAULT '',
+    last_name     text        NOT NULL,
+    email         text        NOT NULL UNIQUE,
+    phone         text        NOT NULL,
+    city          text        NOT NULL CHECK (city IN ('istanbul', 'ankara', 'izmir', 'bursa', 'antalya', 'adana', 'konya', 'gaziantep', 'kocaeli', 'eskisehir')),
+    language      text        NOT NULL CHECK (language IN ('tr', 'en')),
+    loyalty_tier  text        NOT NULL CHECK (loyalty_tier IN ('bronze', 'silver', 'gold')),
+    signup_at     timestamptz NOT NULL,
+    consent_sms   boolean     NOT NULL,
+    consent_email boolean     NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE user_events (
+    id          bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id     uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    type        text        NOT NULL CHECK (type IN ('cart_add', 'purchase', 'page_view')),
+    occurred_at timestamptz NOT NULL
+);
+
+-- Serves the EXISTS / NOT EXISTS subqueries the compiler emits.
+CREATE INDEX user_events_user_type_time ON user_events (user_id, type, occurred_at);
+
+-- The seed's time anchor (docs/seed-data.md). One row at most.
+CREATE TABLE seed_meta (
+    id         boolean     PRIMARY KEY DEFAULT true CHECK (id),
+    as_of      timestamptz NOT NULL,
+    seed       bigint      NOT NULL,
+    user_count integer     NOT NULL CHECK (user_count >= 0),
+    loaded_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- +goose Down
+DROP TABLE seed_meta;
+DROP TABLE user_events;
+DROP TABLE users;
+-- Campaigns, their revisions and audit trail, LLM call records, and messages.
+-- State lists live in domains so each list is written once. Invariants the
+-- state machine and the delivery worker rely on are enforced here too, so a
+-- code bug fails loudly instead of corrupting data.
+
+-- +goose Up
+CREATE DOMAIN campaign_state AS text CHECK (VALUE IN (
+    'draft', 'generating', 'in_review', 'generation_failed', 'approved',
+    'sending', 'completed', 'completed_with_failures', 'rejected', 'cancelled'));
+
+CREATE DOMAIN channel AS text CHECK (VALUE IN ('sms', 'email'));
+
+-- "Retrying" is not a state: it is queued with attempts > 0.
+CREATE DOMAIN message_state AS text CHECK (VALUE IN (
+    'queued', 'sending', 'sent', 'failed', 'dead', 'skipped'));
+
+-- Reason labels, shared by metrics and the dashboard. conn_refused is safe
+-- to retry; timeout and conn_reset are ambiguous and safe only because every
+-- retry carries the same idempotency key.
+CREATE DOMAIN error_class AS text CHECK (VALUE IN (
+    'rate_limited', 'server_error', 'timeout', 'conn_refused', 'conn_reset',
+    'client_error', 'no_consent', 'cancelled'));
+
+CREATE TABLE campaigns (
+    id                   uuid           PRIMARY KEY DEFAULT gen_random_uuid(),
+    brief                text           NOT NULL CHECK (char_length(brief) BETWEEN 1 AND 2000),
+    state                campaign_state NOT NULL DEFAULT 'draft',
+    -- Optimistic locking: every transition is UPDATE ... WHERE version = $v.
+    version              integer        NOT NULL DEFAULT 0,
+    current_revision_id  uuid,
+    approved_revision_id uuid,
+    approved_by          text,
+    approved_at          timestamptz,
+    -- The only source of links in copy ({{campaign_url}}). Code checks it is
+    -- an https URL on an allowlisted domain.
+    campaign_url         text           CHECK (char_length(campaign_url) <= 40),
+    created_at           timestamptz    NOT NULL DEFAULT now(),
+    updated_at           timestamptz    NOT NULL DEFAULT now(),
+    -- An approval is all or nothing.
+    CHECK ((approved_revision_id IS NULL) = (approved_by IS NULL)
+       AND (approved_revision_id IS NULL) = (approved_at IS NULL)),
+    -- Approved and later states always point at the approved revision.
+    CHECK (state NOT IN ('approved', 'sending', 'completed', 'completed_with_failures')
+        OR approved_revision_id IS NOT NULL)
+);
+
+-- Only valid revisions are stored: an LLM attempt or a human edit becomes a
+-- revision after it passes validation (rule 7). Failed LLM attempts are kept
+-- in llm_calls; rejected edits are answered with 422 and not stored.
+CREATE TABLE campaign_revisions (
+    id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id    uuid        NOT NULL REFERENCES campaigns (id) ON DELETE CASCADE,
+    n              integer     NOT NULL CHECK (n >= 1),
+    source         text        NOT NULL CHECK (source IN ('llm', 'human')),
+    segment        jsonb       NOT NULL,
+    sms_body       text        NOT NULL,
+    email_subject  text        NOT NULL,
+    email_body     text        NOT NULL,
+    warnings       jsonb       NOT NULL DEFAULT '[]',
+    audience_total integer     CHECK (audience_total >= 0),
+    sms_eligible   integer     CHECK (sms_eligible >= 0),
+    email_eligible integer     CHECK (email_eligible >= 0),
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, n),
+    -- Target of the composite foreign keys below.
+    UNIQUE (id, campaign_id)
+);
+
+-- A campaign can only point at, or approve, its own revisions.
+ALTER TABLE campaigns
+    ADD FOREIGN KEY (current_revision_id, id) REFERENCES campaign_revisions (id, campaign_id),
+    ADD FOREIGN KEY (approved_revision_id, id) REFERENCES campaign_revisions (id, campaign_id);
+
+-- Audit trail: one row per state transition.
+CREATE TABLE campaign_events (
+    id          bigint         GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    campaign_id uuid           NOT NULL REFERENCES campaigns (id) ON DELETE CASCADE,
+    from_state  campaign_state,
+    to_state    campaign_state NOT NULL,
+    actor       text           NOT NULL,
+    reason      text           NOT NULL DEFAULT '',
+    at          timestamptz    NOT NULL DEFAULT now()
+);
+CREATE INDEX campaign_events_campaign ON campaign_events (campaign_id, id);
+
+-- One row per call to Claude, valid or not.
+CREATE TABLE llm_calls (
+    id                bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    campaign_id       uuid        NOT NULL REFERENCES campaigns (id) ON DELETE CASCADE,
+    stage             text        NOT NULL CHECK (stage IN ('segment', 'content')),
+    attempt           integer     NOT NULL CHECK (attempt >= 1),
+    outcome           text        NOT NULL CHECK (outcome IN ('valid', 'invalid', 'refusal', 'max_tokens', 'transport_error')),
+    error_class       error_class,
+    stop_reason       text,
+    model             text        NOT NULL,
+    input_tokens      integer     CHECK (input_tokens >= 0),
+    output_tokens     integer     CHECK (output_tokens >= 0),
+    latency_ms        integer     NOT NULL CHECK (latency_ms >= 0),
+    raw_output        text,
+    validation_errors jsonb       NOT NULL DEFAULT '[]',
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_calls_campaign ON llm_calls (campaign_id, id);
+
+-- One row per recipient per channel. The id is the idempotency key sent to
+-- the provider on every attempt (rule 10).
+CREATE TABLE messages (
+    id                  uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id         uuid          NOT NULL,
+    revision_id         uuid          NOT NULL,
+    user_id             uuid          NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    channel             channel       NOT NULL,
+    state               message_state NOT NULL DEFAULT 'queued',
+    attempts            integer       NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error_class    error_class,
+    last_error          text,
+    next_attempt_at     timestamptz,
+    provider_message_id text,
+    sent_at             timestamptz,
+    created_at          timestamptz   NOT NULL DEFAULT now(),
+    updated_at          timestamptz   NOT NULL DEFAULT now(),
+    -- The same person never gets the same campaign twice on one channel.
+    UNIQUE (campaign_id, user_id, channel),
+    -- The message belongs to a revision of its own campaign.
+    FOREIGN KEY (revision_id, campaign_id) REFERENCES campaign_revisions (id, campaign_id),
+    -- A sent message always has the provider's id and a send time.
+    CHECK (state <> 'sent' OR (provider_message_id IS NOT NULL AND sent_at IS NOT NULL)),
+    -- Failed, dead and skipped messages always say why.
+    CHECK (state NOT IN ('failed', 'dead', 'skipped') OR last_error_class IS NOT NULL)
+);
+CREATE INDEX messages_campaign_state ON messages (campaign_id, state);
+-- The dashboard's "Needs attention" panel scans unfinished messages.
+CREATE INDEX messages_unfinished ON messages (state, updated_at) WHERE state IN ('queued', 'sending');
+
+-- +goose Down
+DROP TABLE messages;
+DROP TABLE llm_calls;
+DROP TABLE campaign_events;
+ALTER TABLE campaigns DROP COLUMN current_revision_id, DROP COLUMN approved_revision_id;
+DROP TABLE campaign_revisions;
+DROP TABLE campaigns;
+DROP DOMAIN error_class;
+DROP DOMAIN message_state;
+DROP DOMAIN channel;
+DROP DOMAIN campaign_state;
