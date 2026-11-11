@@ -1,0 +1,37 @@
+# Gitleaks config. The default rules stay on. Only four known false
+# positives in the exported session transcripts are allowed, and only
+# under ai-sessions/. A real key in a transcript still fails CI.
+
+[extend]
+useDefault = true
+
+# Claude Code's API beta flag names in request metadata,
+# for example interleaved-thinking-2025-05-14.
+[[allowlists]]
+description = "ai-sessions: beta flag names"
+condition = "AND"
+paths = ['''^ai-sessions/''']
+regexes = ['''^[a-z]+(-[a-z0-9]+)*-\d{4}-?\d{2}-?\d{2}$''']
+
+# turnAttributionKey: a session UUID in the app's turn metadata.
+[[allowlists]]
+description = "ai-sessions: turn attribution UUIDs"
+condition = "AND"
+paths = ['''^ai-sessions/''']
+regexTarget = "match"
+regexes = ['''turnAttributionKey":"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}''']
+
+# Go module checksums printed in tool output (go.sum lines).
+[[allowlists]]
+description = "ai-sessions: go.sum h1 hashes"
+condition = "AND"
+paths = ['''^ai-sessions/''']
+regexTarget = "line"
+regexes = ['''v[0-9][^ ]* h1:[A-Za-z0-9+/]{43}=''']
+
+# The documented compose dev token (README, docker-compose.yml).
+[[allowlists]]
+description = "ai-sessions: compose dev token"
+condition = "AND"
+paths = ['''^ai-sessions/''']
+regexes = ['''^dev-admin-token$''']
