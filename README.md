@@ -48,8 +48,8 @@ Ardından tekrar `make up` çalıştırman yeterli. API anahtarı yalnızca `wor
 
 1. Brief alanına örneğin şunu yaz: *"İstanbul'da son 30 günde sepete ürün ekleyip satın almayan müşterilere %20 indirim kampanyası"*.
 2. Kampanya linki için izinli örnek URL'lerden birini seç (`https://shop.example/...`).
-3. Üretimi başlat. Segment kuralları ve metinler SSE üzerinden canlı akarak ekrana gelir. Derleyicinin ürettiği kural açıklamasını, eşleşen kişi sayısını ve SMS/e-posta taslaklarını incele.
-4. İstersen metinleri veya kuralları düzenle. Yaptığın her düzenleme LLM çıktısıyla birebir aynı doğrulayıcıdan geçer.
+3. Üretimi başlat. Segment kuralları ve metinler SSE üzerinden ekrana gelir. Derleyicinin ürettiği kural açıklamasını, eşleşen kişi sayısını ve SMS/e-posta taslaklarını incele.
+4. İstersen metinleri düzenle. Yaptığın her düzenleme LLM çıktısıyla birebir aynı doğrulayıcıdan geçer.
 5. Kampanyayı onayla. Teslimat panelinde mesaj durumlarının canlı akışını, takılan veya hata alan mesajları ise "Needs attention" tablosunda görebilirsin.
 
 ### Farklı kitle büyüklüklerini denemek

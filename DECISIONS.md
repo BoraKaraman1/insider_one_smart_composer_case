@@ -8,7 +8,7 @@ Tasarımın teknik detayı [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) dosyası
 2. **Testleri spec olarak kullandım.** Bir oturumda yalnızca testleri yazdırdım, ayrı bir oturumda ise bu testleri geçecek uygulamayı geliştirdim. Ajan mevcut bir testi değiştirmek istediğinde önce benden onay aldı. Değiştirilen tüm testlerin listesi aşağıdaki ajan günlüğünde var.
 3. **Her aşamadan sonra kasıtlı hata (fault injection) denedim.** Kod bittikten sonra ajana çekirdek davranışı bilerek bozdurdum (örneğin versiyon kontrolünü veya kilidi kaldırtıp testleri çalıştırdım), ilgili testin gerçekten kırıldığını gördükten sonra kodu geri aldırdım. Kodu bozduğumuzda kırılmayan testi geçerli saymadım.
 4. **Farklı bir modele çapraz inceleme yaptırdım.** Planı ve yazılan kodu birkaç tur başka bir modele incelettim. Gelen bulguları Claude'a verip kod üzerinden tek tek doğrulattım. Hangi bulgunun gerçek bir sorun olduğuna ve hangisini düzelteceğimize ben karar verdim. Google Gemini 4 Argon ve GPT 6.1 Sol çapraz inceleme için kullanıldılar.
-5. **Commit'leri kendim attım.** Ajanın commit atmasına izin vermedim. İlk adımda bir kez kendi kendine commit attı; hemen geri aldırdım ve kuralı `CLAUDE.md`'ye ekledim.
+5. **Commit'leri kendim attım.** Ajanın commit atmasına izin vermedim.
 6. **API anahtarı hiçbir ajan oturumuna girmedi.** `.env` dosyası ajan tarafından okunamaz, `$ANTHROPIC_API_KEY` genişletilemez. Yazdığımız güvenlik hook'u birkaç kez meşru test komutlarını da engelledi ama ne ajan etrafından dolandı ne de ben hook'u gevşettim. Gerçek model denemelerini (`LLM_MODE=anthropic make eval`) kendi terminalimde çalıştırdım.
 7. **Alt ajanları yalnızca izole işlerde kullandım.** Birbirine ve veritabanına bağımlı olmayan parçalarda (frontend, eval, metrikler) üç alt ajan paralel çalıştı. Her biri sadece kendi klasörüne dokundu ve testlerde şüpheli gördüğü yerleri kendisi değiştirmek yerine raporladı. Çıktıları ana oturumda inceleyip testleri kendim koşturdum.
 
@@ -140,7 +140,7 @@ Tasarımın teknik detayı [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) dosyası
 
 ### 23. Kapsam: plan incelemesinde "süs" denilen güvenlik ve test katmanlarını korudum
 
-- **Bağlam:** Planı incelettirdiğim ikinci model; pre-commit gizli anahtar testlerini, katı alan adı kontrolünü ve 500 kurallık oracle testini "fazla detaylı / süs" bularak kesmemi önerdi.
+- **Bağlam:** Planı incelettirdiğim ajan; pre-commit gizli anahtar testlerini, katı alan adı kontrolünü ve 500 kurallık oracle testi kombinasyonunu "fazla detaylı / süs" bularak kesmemi önerdi.
 - **Seçim:** Zamanım yettiği ve bu kontroller gerçekten hata yakaladığı için hiçbirini kesmedim. Nitekim ilerleyen aşamalarda hem link kontrolü hem de oracle/chaos testleri gerçek kenar durumları yakaladı. Modelin haklı olduğu iki öneriyi (paket başına şablondan klonlanan test veritabanı ve sıralı olay sınırının belgelenmesi) ise doğrudan plana dahil ettim.
 
 ### 24. Zamanlanmış gönderim ve A/B testi yapılmadı
